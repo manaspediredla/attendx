@@ -220,10 +220,12 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden" style={{ background: '#0E1117' }}>
       {/* ── Looping Video Background ── */}
       <video
+        ref={(el) => { if (el) { el.muted = true; el.play().catch(() => {}); } }}
         autoPlay
         loop
         muted
         playsInline
+        preload="auto"
         className="absolute inset-0 w-full h-full object-cover"
         style={{ filter: 'brightness(0.55) saturate(0.9)' }}
       >
