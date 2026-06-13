@@ -199,3 +199,21 @@ def get_cities():
     """Get list of all unique cities."""
     cities = db.session.query(Student.city_name).distinct().all()
     return jsonify(sorted([c[0] for c in cities if c[0]])), 200
+
+
+@teacher_bp.route("/locations", methods=["GET"])
+@teacher_or_admin_required
+def get_locations():
+    """Get list of all registered GPS locations (from allowed_locations)."""
+    from app.models.allowed_location import AllowedLocation
+    locations = AllowedLocation.query.filter_by(is_active=True).all()
+    return jsonify([
+        {
+            "id": loc.id,
+            "name": loc.name,
+            "city": loc.city_name,
+            "label": f"{loc.name} ({loc.city_name})" if loc.city_name else loc.name,
+        }
+        for loc in locations
+    ]), 200
+

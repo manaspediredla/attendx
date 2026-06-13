@@ -38,20 +38,20 @@ export default function TeacherReports() {
 
   // Dropdown Filters
   const [collegeFilter, setCollegeFilter] = useState('');
-  const [cityFilter, setCityFilter] = useState('');
+  const [locationFilter, setLocationFilter] = useState('');
   const [deptFilter, setDeptFilter] = useState('');
   const [sectionFilter, setSectionFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
 
   // Filter options from API
   const [colleges, setColleges] = useState([]);
-  const [cities, setCities] = useState([]);
+  const [locations, setLocations] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [sections, setSections] = useState([]);
 
   useEffect(() => {
     api.get('/teacher/colleges').then(r => setColleges(r.data || [])).catch(() => {});
-    api.get('/teacher/cities').then(r => setCities(r.data || [])).catch(() => {});
+    api.get('/teacher/locations').then(r => setLocations(r.data || [])).catch(() => {});
     api.get('/teacher/departments').then(r => setDepartments(r.data || [])).catch(() => {});
     api.get('/teacher/sections').then(r => setSections(r.data || [])).catch(() => {});
   }, []);
@@ -75,7 +75,7 @@ export default function TeacherReports() {
     setSelectedSession(session);
     setLoadingRecords(true);
     setSortField('');
-    setCollegeFilter(''); setCityFilter(''); setDeptFilter(''); setSectionFilter(''); setStatusFilter('');
+    setCollegeFilter(''); setLocationFilter(''); setDeptFilter(''); setSectionFilter(''); setStatusFilter('');
 
     api.get(`/attendance/live/${session.id}?include_absent=true`)
       .then(r => setRecords(r.data.records || []))
@@ -122,7 +122,7 @@ export default function TeacherReports() {
   const filteredRecords = records
     .filter(r => {
       if (collegeFilter && (r.college_name || r.campus_name) !== collegeFilter) return false;
-      if (cityFilter && r.city_name !== cityFilter) return false;
+      if (locationFilter && r.campus_name !== locationFilter) return false;
       if (deptFilter) {
         // student department - need to check from student data if available
         return true; // department filter is on session level
@@ -137,7 +137,7 @@ export default function TeacherReports() {
       if (sortField === 'student_name') { aVal = a.student_name || ''; bVal = b.student_name || ''; }
       else if (sortField === 'roll_number') { aVal = a.roll_number || a.id || ''; bVal = b.roll_number || b.id || ''; }
       else if (sortField === 'college') { aVal = a.college_name || a.campus_name || ''; bVal = b.college_name || b.campus_name || ''; }
-      else if (sortField === 'city') { aVal = a.city_name || ''; bVal = b.city_name || ''; }
+      else if (sortField === 'location') { aVal = a.campus_name || ''; bVal = b.campus_name || ''; }
       else if (sortField === 'status') { aVal = a.final_attendance_status || a.status || ''; bVal = b.final_attendance_status || b.status || ''; }
       else if (sortField === 'gps') { aVal = a.gps_validated ? '1' : '0'; bVal = b.gps_validated ? '1' : '0'; }
       else { aVal = a[sortField] || ''; bVal = b[sortField] || ''; }
@@ -149,9 +149,9 @@ export default function TeacherReports() {
   const recordStatuses = [...new Set(records.map(r => r.final_attendance_status || r.status).filter(Boolean))];
 
   const clearFilters = () => {
-    setCollegeFilter(''); setCityFilter(''); setDeptFilter(''); setSectionFilter(''); setStatusFilter('');
+    setCollegeFilter(''); setLocationFilter(''); setDeptFilter(''); setSectionFilter(''); setStatusFilter('');
   };
-  const hasActiveFilters = collegeFilter || cityFilter || deptFilter || sectionFilter || statusFilter;
+  const hasActiveFilters = collegeFilter || locationFilter || deptFilter || sectionFilter || statusFilter;
 
   const fmt = (dt) => dt ? dt.slice(11, 16) : '—';
 
@@ -287,9 +287,9 @@ export default function TeacherReports() {
                   {colleges.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
 
-                <select value={cityFilter} onChange={e => setCityFilter(e.target.value)} className="input-field text-sm !w-auto min-w-[140px]">
-                  <option value="">All Cities</option>
-                  {cities.map(c => <option key={c} value={c}>{c}</option>)}
+                <select value={locationFilter} onChange={e => setLocationFilter(e.target.value)} className="input-field text-sm !w-auto min-w-[160px]">
+                  <option value="">All Locations</option>
+                  {locations.map(l => <option key={l.id} value={l.name}>{l.label}</option>)}
                 </select>
 
                 {recordStatuses.length > 0 && (
@@ -328,7 +328,7 @@ export default function TeacherReports() {
                           { key: 'student_name', label: 'Student Name' },
                           { key: 'roll_number', label: 'Roll No' },
                           { key: 'college', label: 'College' },
-                          { key: 'city', label: 'City' },
+                          { key: 'location', label: 'Location' },
                           { key: 'gps', label: 'GPS' },
                           { key: 'status', label: 'Status' },
                         ].map(col => (
@@ -349,7 +349,7 @@ export default function TeacherReports() {
                             <td className="px-4 py-2.5 font-medium text-surface-800 dark:text-surface-100">{r.student_name}</td>
                             <td className="px-4 py-2.5 text-surface-600 dark:text-surface-400 font-mono text-xs">{r.roll_number || r.id}</td>
                             <td className="px-4 py-2.5 text-surface-700 dark:text-surface-300">{r.college_name || r.campus_name || '—'}</td>
-                            <td className="px-4 py-2.5 text-surface-700 dark:text-surface-300">{r.city_name || '—'}</td>
+                            <td className="px-4 py-2.5 text-surface-700 dark:text-surface-300">{r.campus_name || '—'}</td>
                             <td className="px-4 py-2.5">
                               {r.gps_validated ? (
                                 <span className="text-emerald-400 text-xs font-semibold">✓ Verified</span>
