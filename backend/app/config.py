@@ -15,14 +15,16 @@ class Config:
     SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key")
     DEBUG = False
 
-    # Database
+    # Database — supports DATABASE_URL (cloud hosts) or individual vars (local MySQL)
     DB_HOST = os.getenv("DB_HOST", "localhost")
     DB_PORT = os.getenv("DB_PORT", "3306")
     DB_USER = os.getenv("DB_USER", "root")
     DB_PASSWORD = os.getenv("DB_PASSWORD", "")
     DB_NAME = os.getenv("DB_NAME", "attendance_db")
 
-    SQLALCHEMY_DATABASE_URI = (
+    # Use DATABASE_URL if provided (Render, Railway, etc.), else build MySQL URI
+    SQLALCHEMY_DATABASE_URI = os.getenv(
+        "DATABASE_URL",
         f"mysql+pymysql://{DB_USER}:{quote_plus(DB_PASSWORD)}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
