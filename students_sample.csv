@@ -1,0 +1,21 @@
+id,full_name,email,gender,college_name,city_name,department,section,year
+22CS001,Akhil Reddy,akhil.reddy@institution.edu,Male,Symbiosis Institute of Technology,Visakhapatnam,CSE,A,2
+22CS002,Priya Sharma,priya.sharma@institution.edu,Female,Symbiosis Institute of Technology,Visakhapatnam,CSE,A,2
+22CS003,Rohan Naidu,rohan.naidu@institution.edu,Male,Symbiosis Institute of Technology,Visakhapatnam,CSE,B,3
+22CS004,Ananya Rao,ananya.rao@institution.edu,Female,Symbiosis Institute of Technology,Visakhapatnam,CSE,B,2
+22CS005,Vikram Prasad,vikram.prasad@institution.edu,Male,Symbiosis Institute of Technology,Visakhapatnam,ECE,A,3
+22CS006,Sai Krishna,sai.krishna@institution.edu,Male,Symbiosis Institute of Technology,Visakhapatnam,CSE,A,1
+22CS007,Meghana Devi,meghana.devi@institution.edu,Female,Symbiosis Institute of Technology,Visakhapatnam,ECE,B,2
+22CS008,Sneha Iyer,sneha.iyer@institution.edu,Female,Symbiosis Institute of Technology,Chennai,CSE,A,2
+22CS009,Karthik Subramanian,karthik.subramanian@institution.edu,Male,Symbiosis Institute of Technology,Chennai,CSE,A,4
+22CS010,Divya Lakshmi,divya.lakshmi@institution.edu,Female,Symbiosis Institute of Technology,Chennai,CSE,B,2
+22CS011,Arun Kumar,arun.kumar@institution.edu,Male,Symbiosis Institute of Technology,Chennai,ECE,A,3
+22CS012,Meera Krishnan,meera.krishnan@institution.edu,Female,Symbiosis Institute of Technology,Chennai,CSE,B,1
+22CS013,Pooja Nair,pooja.nair@institution.edu,Female,Symbiosis Institute of Technology,Chennai,ECE,B,2
+22CS014,Ravi Teja,ravi.teja@institution.edu,Male,Symbiosis Institute of Technology,Hyderabad,CSE,A,3
+22CS015,Kavya Reddy,kavya.reddy@institution.edu,Female,Symbiosis Institute of Technology,Hyderabad,CSE,A,2
+22CS016,Suresh Babu,suresh.babu@institution.edu,Male,Symbiosis Institute of Technology,Hyderabad,ECE,B,4
+22CS017,Lakshmi Devi,lakshmi.devi@institution.edu,Female,Symbiosis Institute of Technology,Hyderabad,CSE,B,2
+22CS018,Harsha Vardhan,harsha.vardhan@institution.edu,Male,Symbiosis Institute of Technology,Hyderabad,CSE,A,3
+22CS019,Deepika Chowdary,deepika.chowdary@institution.edu,Female,Symbiosis Institute of Technology,Hyderabad,CSE,B,1
+22CS020,Rahul Menon,rahul.menon@institution.edu,Male,Symbiosis Institute of Technology,Hyderabad,ECE,A,2

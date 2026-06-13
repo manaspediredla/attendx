@@ -1,0 +1,62 @@
+# ==========================
+# ATTENDX .gitignore
+# ==========================
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# ── Virtual Environment ──
+backend/venv/
+backend/.venv/
+venv/
+.venv/
+env/
+
+# ── Environment Variables (SECRETS!) ──
+.env
+backend/.env
+frontend/.env
+frontend/.env.local
+frontend/.env.production.local
+
+# ── Database ──
+*.db
+*.sqlite3
+migrations/
+
+# ── Node.js ──
+node_modules/
+frontend/node_modules/
+
+# ── Build Output ──
+frontend/dist/
+frontend/build/
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+*.log
+
+# ── Face Recognition Data (large binary files) ──
+# Uncomment if you want to exclude face data from repo
+# backend/face_data/
+
+# ── Misc ──
+*.bak
+*.tmp
+.cache/
