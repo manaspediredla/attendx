@@ -23,10 +23,14 @@ class Config:
     DB_NAME = os.getenv("DB_NAME", "attendance_db")
 
     # Use DATABASE_URL if provided (Render, Railway, etc.), else build MySQL URI
-    SQLALCHEMY_DATABASE_URI = os.getenv(
+    _database_url = os.getenv(
         "DATABASE_URL",
         f"mysql+pymysql://{DB_USER}:{quote_plus(DB_PASSWORD)}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     )
+    # Render uses postgres:// but SQLAlchemy requires postgresql://
+    if _database_url.startswith("postgres://"):
+        _database_url = _database_url.replace("postgres://", "postgresql://", 1)
+    SQLALCHEMY_DATABASE_URI = _database_url
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     # JWT

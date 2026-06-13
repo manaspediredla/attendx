@@ -8,7 +8,12 @@ import base64
 import pickle
 import os
 
-import cv2
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+
 import numpy as np
 from flask import current_app
 

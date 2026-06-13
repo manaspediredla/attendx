@@ -156,7 +156,7 @@ function AppLayout() {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename="/attendx">
       <AuthProvider>
         <AppLayout />
         <Toaster
