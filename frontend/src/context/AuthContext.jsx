@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import {
   initTabAuth,
@@ -12,6 +13,7 @@ import {
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
+  const navigate = useNavigate();
   initTabAuth();
 
   const [user, setUser] = useState(() => getStoredUser());
@@ -95,6 +97,7 @@ export function AuthProvider({ children }) {
     setUser(null);
     setStudentId(null);
     setMustChangePassword(false);
+    navigate('/login', { replace: true });
   };
 
   const passwordChanged = () => {
