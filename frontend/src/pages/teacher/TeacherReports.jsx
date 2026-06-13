@@ -292,12 +292,12 @@ export default function TeacherReports() {
                   {locations.map(l => <option key={l.id} value={l.name}>{l.label}</option>)}
                 </select>
 
-                {recordStatuses.length > 0 && (
-                  <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="input-field text-sm !w-auto min-w-[130px]">
-                    <option value="">All Statuses</option>
-                    {recordStatuses.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                )}
+                <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="input-field text-sm !w-auto min-w-[130px]">
+                  <option value="">All Statuses</option>
+                  <option value="full">Full</option>
+                  <option value="partial">Partial</option>
+                  <option value="absent">Absent</option>
+                </select>
 
                 {hasActiveFilters && (
                   <button onClick={clearFilters} className="text-xs text-red-400 hover:text-red-300 font-semibold">
