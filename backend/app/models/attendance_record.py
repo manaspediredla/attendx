@@ -81,7 +81,7 @@ class AttendanceRecord(db.Model):
             "gps_validated": self.gps_validated,
             "gps_latitude": self.gps_latitude,
             "gps_longitude": self.gps_longitude,
-            "college_name": self.campus_name or (self.student.college_name if self.student else None),
+            "college_name": self.student.college_name if self.student else None,
             "campus_name": self.campus_name,
             "city_name": self.city_name,
             "network_validated": self.network_validated,
