@@ -5,7 +5,12 @@ import api from '../../api/axios';
 import { useAuth } from '../../context/AuthContext';
 import StatsCard from '../../components/common/StatsCard';
 
-const COLORS = ['#10b981', '#f59e0b', '#ef4444', '#94a3b8'];
+const STATUS_COLORS = {
+  Full: '#10b981',
+  Partial: '#f59e0b',
+  Suspicious: '#f97316',
+  Absent: '#ef4444',
+};
 
 export default function AttendanceAnalytics() {
   const { studentId } = useAuth();
@@ -77,7 +82,7 @@ export default function AttendanceAnalytics() {
               <PieChart>
                 <Pie data={pieData} cx="50%" cy="50%" innerRadius={65} outerRadius={100} paddingAngle={5} dataKey="value"
                   label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
-                  {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                  {pieData.map((entry, i) => <Cell key={i} fill={STATUS_COLORS[entry.name] || '#94a3b8'} />)}
                 </Pie>
                 <Tooltip contentStyle={{ background: '#1e293b', border: 'none', borderRadius: 12, color: '#f1f5f9' }} />
               </PieChart>
