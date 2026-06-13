@@ -4,7 +4,7 @@
 export default function AttendXLogo({ size = 36, className = '' }) {
   return (
     <img
-      src="/attendx-logo.jpg"
+      src={`${import.meta.env.BASE_URL}attendx-logo.jpg`}
       alt="AttendX"
       draggable="false"
       className={className}

@@ -227,8 +227,8 @@ export default function LoginPage() {
         className="absolute inset-0 w-full h-full object-cover"
         style={{ filter: 'brightness(0.55) saturate(0.9)' }}
       >
-        <source src="/videos/login-bg.mp4" type="video/mp4" />
-        <source src="/videos/login-bg.mov" type="video/quicktime" />
+        <source src={`${import.meta.env.BASE_URL}videos/login-bg.mp4`} type="video/mp4" />
+        <source src={`${import.meta.env.BASE_URL}videos/login-bg.mov`} type="video/quicktime" />
       </video>
       {/* Dark gradient overlay for text readability */}
       <div className="absolute inset-0 bg-gradient-to-br from-[#0E1117]/40 via-[#0E1117]/25 to-[#0E1117]/40" />
