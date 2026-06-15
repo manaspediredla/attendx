@@ -37,11 +37,14 @@ export function AuthProvider({ children }) {
         setStudentId(res.data.student.internal_id);
       }
       setMustChangePassword(res.data.must_change_password || false);
-    } catch {
-      clearTabAuth();
-      setToken(null);
-      setUser(null);
-      setStudentId(null);
+    } catch (err) {
+      // Only clear auth on 401 (invalid token), not on network errors
+      if (err?.response?.status === 401) {
+        clearTabAuth();
+        setToken(null);
+        setUser(null);
+        setStudentId(null);
+      }
     } finally {
       setLoading(false);
     }

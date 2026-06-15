@@ -6,6 +6,7 @@ export function initTabAuth() {
   const hasSession = sessionStorage.getItem('access_token');
   const tabSession = sessionStorage.getItem(TAB_SESSION_KEY);
 
+  // If this tab has no token AND hasn't explicitly logged out, copy from localStorage
   if (!hasSession && tabSession !== 'false') {
     AUTH_KEYS.forEach((key) => {
       const value = localStorage.getItem(key);
