@@ -375,61 +375,60 @@ def delete_location(location_id):
 @admin_bp.route("/geocode", methods=["GET"])
 @super_admin_required
 def geocode_search():
-    """Proxy geocode search to Nominatim (avoids CORS/User-Agent issues from browser)."""
+    """Proxy geocode search to Nominatim with multi-strategy matching."""
     import requests as http_requests
 
     query = request.args.get("q", "").strip()
     if not query:
         return jsonify([]), 200
 
-    try:
-        resp = http_requests.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={
-                "q": query,
-                "format": "json",
-                "limit": 10,
-                "addressdetails": 1,
-                "countrycodes": "in",
-                "dedupe": 1,
-            },
-            headers={
-                "User-Agent": "ATTENDX/1.0 (attendance-system)",
-                "Accept-Language": "en",
-            },
-            timeout=5,
-        )
-        resp.raise_for_status()
-        results = resp.json()
+    headers = {
+        "User-Agent": "ATTENDX/1.0 (attendance-system)",
+        "Accept-Language": "en",
+    }
 
-        # If India-only gave few results, also search globally
-        if len(results) < 3:
-            global_resp = http_requests.get(
+    def _search(q, country=None):
+        params = {"q": q, "format": "json", "limit": 10, "addressdetails": 1, "dedupe": 1}
+        if country:
+            params["countrycodes"] = country
+        try:
+            r = http_requests.get(
                 "https://nominatim.openstreetmap.org/search",
-                params={
-                    "q": query,
-                    "format": "json",
-                    "limit": 10,
-                    "addressdetails": 1,
-                    "dedupe": 1,
-                },
-                headers={
-                    "User-Agent": "ATTENDX/1.0 (attendance-system)",
-                    "Accept-Language": "en",
-                },
-                timeout=5,
+                params=params, headers=headers, timeout=5,
             )
-            global_resp.raise_for_status()
-            # Merge, avoiding duplicates
-            seen_ids = {r["place_id"] for r in results}
-            for r in global_resp.json():
-                if r["place_id"] not in seen_ids:
-                    results.append(r)
-                    seen_ids.add(r["place_id"])
+            r.raise_for_status()
+            return r.json()
+        except Exception:
+            return []
 
-        return jsonify(results[:10]), 200
-    except Exception:
-        return jsonify([]), 200
+    seen = {}
+    results = []
+
+    def _merge(items):
+        for r in items:
+            pid = r.get("place_id")
+            if pid and pid not in seen:
+                seen[pid] = True
+                results.append(r)
+
+    # Strategy 1: Exact query, India first
+    _merge(_search(query, "in"))
+
+    # Strategy 2: Exact query globally
+    if len(results) < 5:
+        _merge(_search(query))
+
+    # Strategy 3: Append "India" if not already present
+    if len(results) < 3 and "india" not in query.lower():
+        _merge(_search(f"{query}, India"))
+
+    # Strategy 4: Try partial queries (drop first/last word)
+    words = query.split()
+    if len(results) < 3 and len(words) > 2:
+        _merge(_search(" ".join(words[:-1]), "in"))
+        _merge(_search(" ".join(words[1:]), "in"))
+
+    return jsonify(results[:10]), 200
 
 
 # ── Network Management ─────────────────────────────────────────────
