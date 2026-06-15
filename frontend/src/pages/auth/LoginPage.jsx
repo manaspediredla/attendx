@@ -71,6 +71,7 @@ export default function LoginPage() {
   const [livenessMessage, setLivenessMessage] = useState('');
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [challengeStep, setChallengeStep] = useState(0);
+  const challengeStepRef = useRef(0); // ref to avoid stale closure in setInterval
   const [expressionConfidence, setExpressionConfidence] = useState(0);
   const turnConfirmRef = useRef(0);
   const livenessIntervalRef = useRef(null);
@@ -258,21 +259,27 @@ export default function LoginPage() {
         .withFaceExpressions();
       if (!det) { setLivenessMessage('Position your face'); turnConfirmRef.current = 0; setExpressionConfidence(0); return; }
 
-      const challenge = EXPRESSION_CHALLENGES[challengeStep];
+      // Use REF to get current step — avoids stale closure
+      const currentStep = challengeStepRef.current;
+      const challenge = EXPRESSION_CHALLENGES[currentStep];
       if (!challenge) return;
       const score = det.expressions[challenge.key] || 0;
       setExpressionConfidence(Math.round(score * 100));
 
+      console.log(`Login liveness step=${currentStep} checking=${challenge.key} score=${score.toFixed(3)} threshold=${challenge.threshold} confirms=${turnConfirmRef.current}`);
+
       if (score >= challenge.threshold) {
         turnConfirmRef.current++;
         if (turnConfirmRef.current >= 5) {
-          const nextStep = challengeStep + 1;
+          const nextStep = currentStep + 1;
           if (nextStep >= EXPRESSION_CHALLENGES.length) {
             setLivenessVerified(true); setLivenessChecking(false);
             if (livenessIntervalRef.current) { clearInterval(livenessIntervalRef.current); livenessIntervalRef.current = null; }
             setLivenessMessage('Liveness verified! ✓');
             toast.success('Liveness verified!');
           } else {
+            // Update BOTH state and ref
+            challengeStepRef.current = nextStep;
             setChallengeStep(nextStep); turnConfirmRef.current = 0; setExpressionConfidence(0);
             setLivenessMessage(EXPRESSION_CHALLENGES[nextStep].label);
           }
@@ -283,15 +290,19 @@ export default function LoginPage() {
         turnConfirmRef.current = 0;
         setLivenessMessage(`${challenge.label} (${Math.round(score * 100)}%)`);
       }
-    } catch { /* silently handle */ }
-  }, [challengeStep]);
+    } catch (err) {
+      console.error('Login expression detect error:', err);
+    }
+  }, []); // NO dependencies — uses refs only
 
   const startLoginLivenessCheck = useCallback(async () => {
     const loaded = await loadFaceModels();
     if (!loaded) { setLivenessMessage('⚠️ Models failed. Tap retry.'); return; }
     setLivenessChecking(true);
+    challengeStepRef.current = 0;
     setChallengeStep(0); turnConfirmRef.current = 0; setExpressionConfidence(0);
     setLivenessMessage(EXPRESSION_CHALLENGES[0].label);
+    if (livenessIntervalRef.current) clearInterval(livenessIntervalRef.current);
     livenessIntervalRef.current = setInterval(detectLoginExpression, 300);
   }, [loadFaceModels, detectLoginExpression]);
 

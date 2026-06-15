@@ -62,6 +62,7 @@ export default function StudentAttendance() {
   const [livenessMessage, setLivenessMessage] = useState('');
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [challengeStep, setChallengeStep] = useState(0); // 0, 1, 2 = expression index
+  const challengeStepRef = useRef(0); // ref to avoid stale closure in setInterval
   const [expressionConfidence, setExpressionConfidence] = useState(0);
   const turnConfirmRef = useRef(0);
   const livenessIntervalRef = useRef(null);
@@ -357,19 +358,21 @@ export default function StudentAttendance() {
         return;
       }
 
-      const challenge = EXPRESSION_CHALLENGES[challengeStep];
+      // Use REF (not state) to get current step — avoids stale closure in setInterval
+      const currentStep = challengeStepRef.current;
+      const challenge = EXPRESSION_CHALLENGES[currentStep];
       if (!challenge) return;
 
       const score = det.expressions[challenge.key] || 0;
       setExpressionConfidence(Math.round(score * 100));
 
+      console.log(`Liveness step=${currentStep} checking=${challenge.key} score=${score.toFixed(3)} threshold=${challenge.threshold} confirms=${turnConfirmRef.current}`);
+
       if (score >= challenge.threshold) {
         turnConfirmRef.current++;
         if (turnConfirmRef.current >= 5) {
-          // This expression confirmed!
-          const nextStep = challengeStep + 1;
+          const nextStep = currentStep + 1;
           if (nextStep >= EXPRESSION_CHALLENGES.length) {
-            // ALL expressions verified!
             setLivenessVerified(true);
             setLivenessChecking(false);
             if (livenessIntervalRef.current) {
@@ -379,6 +382,8 @@ export default function StudentAttendance() {
             setLivenessMessage('Liveness verified! ✓');
             toast.success('Liveness verified! Proceeding to face scan...');
           } else {
+            // Update BOTH state and ref
+            challengeStepRef.current = nextStep;
             setChallengeStep(nextStep);
             turnConfirmRef.current = 0;
             setExpressionConfidence(0);
@@ -391,8 +396,10 @@ export default function StudentAttendance() {
         turnConfirmRef.current = 0;
         setLivenessMessage(`${challenge.label} (${Math.round(score * 100)}% detected)`);
       }
-    } catch { /* silently handle */ }
-  }, [challengeStep]);
+    } catch (err) {
+      console.error('Expression detect error:', err);
+    }
+  }, []); // NO dependencies — uses refs only
 
   const startLivenessCheck = useCallback(async () => {
     const loaded = await loadFaceModels();
@@ -401,10 +408,14 @@ export default function StudentAttendance() {
       return;
     }
     setLivenessChecking(true);
+    // Reset BOTH state and ref
+    challengeStepRef.current = 0;
     setChallengeStep(0);
     turnConfirmRef.current = 0;
     setExpressionConfidence(0);
     setLivenessMessage(EXPRESSION_CHALLENGES[0].label);
+    // Clear any existing interval
+    if (livenessIntervalRef.current) clearInterval(livenessIntervalRef.current);
     livenessIntervalRef.current = setInterval(detectExpression, 300);
   }, [loadFaceModels, detectExpression]);
 
