@@ -86,12 +86,8 @@ export default function LocationManagement() {
     searchTimeoutRef.current = setTimeout(async () => {
       setSearching(true);
       try {
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=6`,
-          { headers: { 'Accept-Language': 'en' } }
-        );
-        const data = await res.json();
-        setSearchResults(Array.isArray(data) ? data : []);
+        const res = await api.get(`/admin/geocode?q=${encodeURIComponent(query)}`);
+        setSearchResults(Array.isArray(res.data) ? res.data : []);
       } catch {
         toast.error('Location search failed');
         setSearchResults([]);

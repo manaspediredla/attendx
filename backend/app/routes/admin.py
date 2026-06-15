@@ -372,6 +372,32 @@ def delete_location(location_id):
     return jsonify({"message": "Location deleted successfully"}), 200
 
 
+@admin_bp.route("/geocode", methods=["GET"])
+@super_admin_required
+def geocode_search():
+    """Proxy geocode search to Nominatim (avoids CORS/User-Agent issues from browser)."""
+    import requests as http_requests
+
+    query = request.args.get("q", "").strip()
+    if not query:
+        return jsonify([]), 200
+
+    try:
+        resp = http_requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": query, "format": "json", "limit": 6, "addressdetails": 1},
+            headers={
+                "User-Agent": "ATTENDX/1.0 (attendance-system)",
+                "Accept-Language": "en",
+            },
+            timeout=5,
+        )
+        resp.raise_for_status()
+        return jsonify(resp.json()), 200
+    except Exception:
+        return jsonify([]), 200
+
+
 # ── Network Management ─────────────────────────────────────────────
 
 @admin_bp.route("/networks", methods=["GET"])
