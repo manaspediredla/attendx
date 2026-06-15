@@ -11,11 +11,22 @@ import AttendXLogo, { AttendXLogoText } from '../../components/common/AttendXLog
 const SCAN_INTERVAL_MS = 600;
 const VERIFY_FRAMES = 3;
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
-const EXPRESSION_CHALLENGES = [
+
+// Expression pool — 3 are randomly picked each session
+const ALL_LOGIN_EXPRESSIONS = [
   { key: 'neutral', label: '😐 Keep a NEUTRAL face', emoji: '😐', threshold: 0.4 },
   { key: 'happy', label: '😁 Now SMILE widely!', emoji: '😁', threshold: 0.5 },
   { key: 'surprised', label: '😲 Look SURPRISED!', emoji: '😲', threshold: 0.3 },
+  { key: 'angry', label: '😠 Look ANGRY!', emoji: '😠', threshold: 0.3 },
+  { key: 'sad', label: '😞 Look SAD!', emoji: '😞', threshold: 0.3 },
 ];
+
+function pickLoginExpressions() {
+  const shuffled = [...ALL_LOGIN_EXPRESSIONS].sort(() => Math.random() - 0.5);
+  const neutral = ALL_LOGIN_EXPRESSIONS[0];
+  const others = shuffled.filter(e => e.key !== 'neutral').slice(0, 2);
+  return [neutral, ...others];
+}
 
 function Particles() {
   const particles = useMemo(() =>
@@ -71,10 +82,13 @@ export default function LoginPage() {
   const [livenessMessage, setLivenessMessage] = useState('');
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [challengeStep, setChallengeStep] = useState(0);
-  const challengeStepRef = useRef(0); // ref to avoid stale closure in setInterval
+  const challengeStepRef = useRef(0);
   const [expressionConfidence, setExpressionConfidence] = useState(0);
+  const [activeChallenges, setActiveChallenges] = useState(ALL_LOGIN_EXPRESSIONS.slice(0, 3));
+  const activeChallengesRef = useRef(ALL_LOGIN_EXPRESSIONS.slice(0, 3));
   const turnConfirmRef = useRef(0);
   const livenessIntervalRef = useRef(null);
+  const livenessFramesRef = useRef([]);
 
   const stopCamera = useCallback(() => {
     if (scanRef.current) clearInterval(scanRef.current);
@@ -180,7 +194,7 @@ export default function LoginPage() {
         setLivenessVerified(false);
         setLivenessChecking(false);
         setLivenessMessage('');
-        setFlashOverlay(null);
+        // Reset liveness state for new verification
         await startCamera();
         return;
       }
@@ -206,7 +220,8 @@ export default function LoginPage() {
     }
     setLoading(true);
     try {
-      const userData = await enrollFace(faceChallengeToken, capturedImages);
+      const lFrames = livenessFramesRef.current.map(f => f.includes(',') ? f.split(',')[1] : f);
+      const userData = await enrollFace(faceChallengeToken, capturedImages, lFrames);
       stopCamera();
       toast.success('Face enrollment complete');
       navigateToRole(userData.role);
@@ -225,7 +240,8 @@ export default function LoginPage() {
     }
     setLoading(true);
     try {
-      const userData = await verifyLoginFace(faceChallengeToken, frames);
+      const lFrames = livenessFramesRef.current.map(f => f.includes(',') ? f.split(',')[1] : f);
+      const userData = await verifyLoginFace(faceChallengeToken, frames, lFrames);
       stopCamera();
       toast.success('Identity verified — welcome');
       navigateToRole(userData.role);
@@ -259,29 +275,35 @@ export default function LoginPage() {
         .withFaceExpressions();
       if (!det) { setLivenessMessage('Position your face'); turnConfirmRef.current = 0; setExpressionConfidence(0); return; }
 
-      // Use REF to get current step — avoids stale closure
       const currentStep = challengeStepRef.current;
-      const challenge = EXPRESSION_CHALLENGES[currentStep];
+      const challenges = activeChallengesRef.current;
+      const challenge = challenges[currentStep];
       if (!challenge) return;
       const score = det.expressions[challenge.key] || 0;
       setExpressionConfidence(Math.round(score * 100));
 
-      console.log(`Login liveness step=${currentStep} checking=${challenge.key} score=${score.toFixed(3)} threshold=${challenge.threshold} confirms=${turnConfirmRef.current}`);
-
       if (score >= challenge.threshold) {
         turnConfirmRef.current++;
         if (turnConfirmRef.current >= 5) {
+          // Capture frame at this expression stage
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0);
+            livenessFramesRef.current.push(canvas.toDataURL('image/jpeg', 0.7));
+          } catch { /* ignore */ }
+
           const nextStep = currentStep + 1;
-          if (nextStep >= EXPRESSION_CHALLENGES.length) {
+          if (nextStep >= challenges.length) {
             setLivenessVerified(true); setLivenessChecking(false);
             if (livenessIntervalRef.current) { clearInterval(livenessIntervalRef.current); livenessIntervalRef.current = null; }
             setLivenessMessage('Liveness verified! ✓');
             toast.success('Liveness verified!');
           } else {
-            // Update BOTH state and ref
             challengeStepRef.current = nextStep;
             setChallengeStep(nextStep); turnConfirmRef.current = 0; setExpressionConfidence(0);
-            setLivenessMessage(EXPRESSION_CHALLENGES[nextStep].label);
+            setLivenessMessage(challenges[nextStep].label);
           }
         } else {
           setLivenessMessage(`${challenge.emoji} Great! Hold... (${turnConfirmRef.current}/5)`);
@@ -293,15 +315,19 @@ export default function LoginPage() {
     } catch (err) {
       console.error('Login expression detect error:', err);
     }
-  }, []); // NO dependencies — uses refs only
+  }, []);
 
   const startLoginLivenessCheck = useCallback(async () => {
     const loaded = await loadFaceModels();
     if (!loaded) { setLivenessMessage('⚠️ Models failed. Tap retry.'); return; }
+    const challenges = pickLoginExpressions();
+    activeChallengesRef.current = challenges;
+    setActiveChallenges(challenges);
     setLivenessChecking(true);
     challengeStepRef.current = 0;
     setChallengeStep(0); turnConfirmRef.current = 0; setExpressionConfidence(0);
-    setLivenessMessage(EXPRESSION_CHALLENGES[0].label);
+    livenessFramesRef.current = [];
+    setLivenessMessage(challenges[0].label);
     if (livenessIntervalRef.current) clearInterval(livenessIntervalRef.current);
     livenessIntervalRef.current = setInterval(detectLoginExpression, 300);
   }, [loadFaceModels, detectLoginExpression]);
@@ -522,7 +548,7 @@ export default function LoginPage() {
                   <div className="absolute inset-0 flex items-center justify-center z-20">
                     <div className="bg-black/70 backdrop-blur-sm rounded-xl p-4 text-center max-w-[220px]">
                       <div className="text-3xl mb-2">
-                        {EXPRESSION_CHALLENGES[challengeStep]?.emoji || '🔒'}
+                        {activeChallenges[challengeStep]?.emoji || '🔒'}
                       </div>
                       <p className="text-xs text-surface-300 font-semibold mb-1">Expression Challenge</p>
                       <p className="text-xs text-surface-400 mb-2">{livenessMessage || 'Loading...'}</p>
@@ -531,7 +557,7 @@ export default function LoginPage() {
                           <div className="h-1.5 bg-surface-700 rounded-full overflow-hidden">
                             <div
                               className={`h-full rounded-full transition-all duration-200 ${
-                                expressionConfidence >= (EXPRESSION_CHALLENGES[challengeStep]?.threshold * 100 || 40)
+                                expressionConfidence >= (activeChallenges[challengeStep]?.threshold * 100 || 40)
                                   ? 'bg-emerald-500' : 'bg-amber-500'
                               }`}
                               style={{ width: `${expressionConfidence}%` }}

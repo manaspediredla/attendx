@@ -74,19 +74,21 @@ export function AuthProvider({ children }) {
   };
 
   /** Step 2a: student face enrollment (first login) */
-  const enrollFace = async (faceChallengeToken, images) => {
+  const enrollFace = async (faceChallengeToken, images, livenessFrames) => {
     const res = await api.post('/auth/enroll-face', {
       face_challenge_token: faceChallengeToken,
       images,
+      liveness_frames: livenessFrames || [],
     });
     return completeAuth(res.data);
   };
 
   /** Step 2b: student face verification (every login) */
-  const verifyLoginFace = async (faceChallengeToken, images) => {
+  const verifyLoginFace = async (faceChallengeToken, images, livenessFrames) => {
     const res = await api.post('/auth/verify-login-face', {
       face_challenge_token: faceChallengeToken,
       images,
+      liveness_frames: livenessFrames || [],
     });
     return completeAuth(res.data);
   };

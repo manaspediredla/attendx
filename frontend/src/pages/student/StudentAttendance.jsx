@@ -14,13 +14,22 @@ const SCAN_INTERVAL_MS = 700;
 const MATCH_STREAK_REQUIRED = 2;
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 
-// Expression challenge: ordered sequence the user must perform
-// A static photo can only show ONE expression — can't change to others
-const EXPRESSION_CHALLENGES = [
+// Expression pool — 3 are randomly picked each session
+const ALL_EXPRESSIONS = [
   { key: 'neutral', label: '😐 Keep a NEUTRAL face', emoji: '😐', threshold: 0.4 },
   { key: 'happy', label: '😁 Now SMILE widely!', emoji: '😁', threshold: 0.5 },
   { key: 'surprised', label: '😲 Look SURPRISED!', emoji: '😲', threshold: 0.3 },
+  { key: 'angry', label: '😠 Look ANGRY!', emoji: '😠', threshold: 0.3 },
+  { key: 'sad', label: '😞 Look SAD!', emoji: '😞', threshold: 0.3 },
 ];
+
+function pickRandomExpressions() {
+  const shuffled = [...ALL_EXPRESSIONS].sort(() => Math.random() - 0.5);
+  // Always start with neutral, then 2 random others
+  const neutral = ALL_EXPRESSIONS[0];
+  const others = shuffled.filter(e => e.key !== 'neutral').slice(0, 2);
+  return [neutral, ...others];
+}
 
 export default function StudentAttendance() {
   const [activeSessions, setActiveSessions] = useState([]);
@@ -64,8 +73,11 @@ export default function StudentAttendance() {
   const [challengeStep, setChallengeStep] = useState(0); // 0, 1, 2 = expression index
   const challengeStepRef = useRef(0); // ref to avoid stale closure in setInterval
   const [expressionConfidence, setExpressionConfidence] = useState(0);
+  const [activeChallenges, setActiveChallenges] = useState(ALL_EXPRESSIONS.slice(0, 3));
+  const activeChallengesRef = useRef(ALL_EXPRESSIONS.slice(0, 3));
   const turnConfirmRef = useRef(0);
   const livenessIntervalRef = useRef(null);
+  const livenessFramesRef = useRef([]); // frames captured at each expression stage
 
   useEffect(() => {
     api.get('/attendance/active-sessions').then(res => {
@@ -228,7 +240,7 @@ export default function StudentAttendance() {
       const res = await api.post('/attendance/mark', {
         session_id: selectedSession.id,
         image,
-        anti_spoof_frames: antiSpoofFrames,
+        anti_spoof_frames: [...antiSpoofFrames, ...livenessFramesRef.current.map(f => f.includes(',') ? f.split(',')[1] : f)],
         latitude: gpsData.latitude,
         longitude: gpsData.longitude,
         public_ip: ip,
@@ -358,21 +370,28 @@ export default function StudentAttendance() {
         return;
       }
 
-      // Use REF (not state) to get current step — avoids stale closure in setInterval
       const currentStep = challengeStepRef.current;
-      const challenge = EXPRESSION_CHALLENGES[currentStep];
+      const challenges = activeChallengesRef.current;
+      const challenge = challenges[currentStep];
       if (!challenge) return;
 
       const score = det.expressions[challenge.key] || 0;
       setExpressionConfidence(Math.round(score * 100));
 
-      console.log(`Liveness step=${currentStep} checking=${challenge.key} score=${score.toFixed(3)} threshold=${challenge.threshold} confirms=${turnConfirmRef.current}`);
-
       if (score >= challenge.threshold) {
         turnConfirmRef.current++;
         if (turnConfirmRef.current >= 5) {
+          // Capture a frame at this expression stage for backend analysis
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0);
+            livenessFramesRef.current.push(canvas.toDataURL('image/jpeg', 0.7));
+          } catch { /* ignore capture errors */ }
+
           const nextStep = currentStep + 1;
-          if (nextStep >= EXPRESSION_CHALLENGES.length) {
+          if (nextStep >= challenges.length) {
             setLivenessVerified(true);
             setLivenessChecking(false);
             if (livenessIntervalRef.current) {
@@ -382,12 +401,11 @@ export default function StudentAttendance() {
             setLivenessMessage('Liveness verified! ✓');
             toast.success('Liveness verified! Proceeding to face scan...');
           } else {
-            // Update BOTH state and ref
             challengeStepRef.current = nextStep;
             setChallengeStep(nextStep);
             turnConfirmRef.current = 0;
             setExpressionConfidence(0);
-            setLivenessMessage(EXPRESSION_CHALLENGES[nextStep].label);
+            setLivenessMessage(challenges[nextStep].label);
           }
         } else {
           setLivenessMessage(`${challenge.emoji} Great! Hold it... (${turnConfirmRef.current}/5)`);
@@ -399,7 +417,7 @@ export default function StudentAttendance() {
     } catch (err) {
       console.error('Expression detect error:', err);
     }
-  }, []); // NO dependencies — uses refs only
+  }, []); 
 
   const startLivenessCheck = useCallback(async () => {
     const loaded = await loadFaceModels();
@@ -407,14 +425,17 @@ export default function StudentAttendance() {
       setLivenessMessage('⚠️ Models failed. Tap retry.');
       return;
     }
+    // Pick random expressions each time
+    const challenges = pickRandomExpressions();
+    activeChallengesRef.current = challenges;
+    setActiveChallenges(challenges);
     setLivenessChecking(true);
-    // Reset BOTH state and ref
     challengeStepRef.current = 0;
     setChallengeStep(0);
     turnConfirmRef.current = 0;
     setExpressionConfidence(0);
-    setLivenessMessage(EXPRESSION_CHALLENGES[0].label);
-    // Clear any existing interval
+    livenessFramesRef.current = [];
+    setLivenessMessage(challenges[0].label);
     if (livenessIntervalRef.current) clearInterval(livenessIntervalRef.current);
     livenessIntervalRef.current = setInterval(detectExpression, 300);
   }, [loadFaceModels, detectExpression]);
@@ -641,7 +662,7 @@ export default function StudentAttendance() {
                 <div className="bg-black/70 backdrop-blur-sm rounded-2xl p-6 text-center max-w-xs">
                   <div className="w-20 h-20 rounded-full bg-primary-500/20 flex items-center justify-center mx-auto mb-3">
                     <span className="text-5xl">
-                      {EXPRESSION_CHALLENGES[challengeStep]?.emoji || '🔒'}
+                      {activeChallenges[challengeStep]?.emoji || '🔒'}
                     </span>
                   </div>
                   <h3 className="text-lg font-bold text-white mb-1">Expression Challenge</h3>
@@ -652,7 +673,7 @@ export default function StudentAttendance() {
                       <div className="h-2 bg-surface-700 rounded-full overflow-hidden">
                         <div
                           className={`h-full rounded-full transition-all duration-200 ${
-                            expressionConfidence >= (EXPRESSION_CHALLENGES[challengeStep]?.threshold * 100 || 40)
+                            expressionConfidence >= (activeChallenges[challengeStep]?.threshold * 100 || 40)
                               ? 'bg-emerald-500' : 'bg-amber-500'
                           }`}
                           style={{ width: `${expressionConfidence}%` }}
@@ -663,7 +684,7 @@ export default function StudentAttendance() {
                   )}
                   {/* Step progress */}
                   <div className="flex items-center justify-center gap-2 mb-3">
-                    {EXPRESSION_CHALLENGES.map((ch, i) => (
+                    {activeChallenges.map((ch, i) => (
                       <div key={ch.key} className="flex items-center gap-1">
                         <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs transition-all duration-300 ${
                           challengeStep > i
@@ -674,7 +695,7 @@ export default function StudentAttendance() {
                         }`}>
                           {challengeStep > i ? '✓' : ch.emoji}
                         </div>
-                        {i < EXPRESSION_CHALLENGES.length - 1 && (
+                        {i < activeChallenges.length - 1 && (
                           <div className={`w-4 h-0.5 ${challengeStep > i ? 'bg-emerald-500' : 'bg-surface-600'}`} />
                         )}
                       </div>

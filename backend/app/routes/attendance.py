@@ -30,6 +30,7 @@ from app.services.face_service import (
     decode_base64_image,
     recognize_student_face,
 )
+from app.services.antispoof_service import run_antispoof_pipeline
 from app.services.validation_service import validate_gps, validate_network, get_validation_status
 from app.utils.decorators import teacher_or_admin_required, student_required, log_audit
 from app.utils.request_helpers import get_client_ip
@@ -39,50 +40,21 @@ import numpy as np
 attendance_bp = Blueprint("attendance", __name__, url_prefix="/api/attendance")
 
 
-def _anti_spoof_check(frames_b64, min_frames=3, min_yaw_variance=0.015):
-    """Check multiple frames for natural head micro-rotations.
+def _anti_spoof_check(frames_b64, min_frames=2):
+    """Multi-layer anti-spoofing using texture, frequency, color, and temporal analysis.
 
-    Computes face symmetry (nose position relative to eyes) for each frame.
-    For a photo on a phone, this ratio stays CONSTANT regardless of phone movement.
-    For a real person, natural head micro-rotations cause this ratio to vary.
+    Delegates to the antispoof_service for comprehensive detection of
+    photos, screenshots, printed images, and replay videos.
     Returns (passed: bool, reason: str).
     """
     if not frames_b64 or len(frames_b64) < min_frames:
         return True, "insufficient_frames"  # Skip if not enough frames sent
 
-    yaw_ratios = []
-    for b64 in frames_b64[:6]:  # max 6 frames
-        img = decode_base64_image(b64)
-        if img is None:
-            continue
-        # Downscale for speed
-        small = img[::2, ::2]
-        landmarks_list = face_recognition.face_landmarks(small)
-        if not landmarks_list:
-            continue
-        lm = landmarks_list[0]
-        # Nose tip (middle point)
-        nose_bridge = lm.get('nose_tip', [])
-        left_eye = lm.get('left_eye', [])
-        right_eye = lm.get('right_eye', [])
-        if not nose_bridge or not left_eye or not right_eye:
-            continue
-        nose_x = nose_bridge[2][0] if len(nose_bridge) > 2 else nose_bridge[0][0]
-        le_cx = sum(p[0] for p in left_eye) / len(left_eye)
-        re_cx = sum(p[0] for p in right_eye) / len(right_eye)
-        eye_span = re_cx - le_cx
-        if eye_span > 0:
-            yaw_ratios.append((nose_x - le_cx) / eye_span)
-
-    if len(yaw_ratios) < min_frames:
-        return True, "landmarks_not_detected"  # Can't verify, allow
-
-    yaw_std = float(np.std(yaw_ratios))
-
-    if yaw_std < min_yaw_variance:
-        return False, f"static_face_detected (yaw_std={yaw_std:.4f}, min={min_yaw_variance})"
-
-    return True, f"motion_ok (yaw_std={yaw_std:.4f})"
+    result = run_antispoof_pipeline(frames_b64)
+    if result["is_live"]:
+        return True, f"passed ({result['checks_passed']}/{result['checks_total']} checks)"
+    else:
+        return False, f"spoof_detected: {result['details']}"
 
 
 def _session_dict(session):

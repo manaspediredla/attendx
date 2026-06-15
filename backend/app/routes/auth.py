@@ -23,6 +23,7 @@ from app.services.face_service import (
     decode_base64_image,
     preview_face_detection,
 )
+from app.services.antispoof_service import run_antispoof_pipeline
 from app.utils.helpers import validate_required_fields
 from app.utils.decorators import log_audit
 from app.utils.request_helpers import get_client_ip, normalize_ip
@@ -234,6 +235,17 @@ def enroll_face():
             "recommended_images": current_app.config.get("FACE_RECOMMENDED_IMAGES", 30),
         }), 400
 
+    # Anti-spoofing check on enrollment frames
+    liveness_frames = data.get("liveness_frames", images[:6])
+    spoof_result = run_antispoof_pipeline(liveness_frames)
+    if not spoof_result["is_live"]:
+        log_audit("spoof_detected_enrollment", f"Spoofing detected during face enrollment for {user.email}: {spoof_result['details']}")
+        return jsonify({
+            "error": "Live Face Verification Failed. Photos, screenshots, printed images, and replay videos are not allowed.",
+            "spoof_detected": True,
+            "spoof_details": spoof_result["details"],
+        }), 403
+
     FaceEncoding.query.filter_by(student_id=student.id).delete()
     db.session.flush()
 
@@ -299,6 +311,18 @@ def verify_login_face():
         return jsonify({"error": "Student account not found"}), 404
 
     student = user.student
+
+    # Anti-spoofing check on login face frames
+    liveness_frames = data.get("liveness_frames", images)
+    spoof_result = run_antispoof_pipeline(liveness_frames)
+    if not spoof_result["is_live"]:
+        log_audit("spoof_detected_login", f"Spoofing detected during login for {user.email}: {spoof_result['details']}")
+        return jsonify({
+            "error": "Live Face Verification Failed. Photos, screenshots, printed images, and replay videos are not allowed.",
+            "spoof_detected": True,
+            "spoof_details": spoof_result["details"],
+        }), 403
+
     face_result = _verify_face_frames(student.id, images)
 
     if not face_result["matched"]:
