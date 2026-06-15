@@ -12,10 +12,15 @@ import {
 const DEFAULT_MIN_ACCURACY = 45;
 const SCAN_INTERVAL_MS = 700;
 const MATCH_STREAK_REQUIRED = 2;
-// Jaw-geometry liveness: jaw ratio change required for a valid head turn
-// A phone photo preserves distances when rotated, so ratio stays ~1.0
-const JAW_TURN_THRESHOLD = 0.25;
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
+
+// Expression challenge: ordered sequence the user must perform
+// A static photo can only show ONE expression — can't change to others
+const EXPRESSION_CHALLENGES = [
+  { key: 'neutral', label: '😐 Keep a NEUTRAL face', emoji: '😐', threshold: 0.4 },
+  { key: 'happy', label: '😁 Now SMILE widely!', emoji: '😁', threshold: 0.5 },
+  { key: 'surprised', label: '😲 Look SURPRISED!', emoji: '😲', threshold: 0.3 },
+];
 
 export default function StudentAttendance() {
   const [activeSessions, setActiveSessions] = useState([]);
@@ -56,8 +61,8 @@ export default function StudentAttendance() {
   const [livenessChecking, setLivenessChecking] = useState(false);
   const [livenessMessage, setLivenessMessage] = useState('');
   const [modelsLoaded, setModelsLoaded] = useState(false);
-  const [challengeStep, setChallengeStep] = useState(0); // 0=center, 1=left, 2=right
-  const centerJawRatioRef = useRef(null);
+  const [challengeStep, setChallengeStep] = useState(0); // 0, 1, 2 = expression index
+  const [expressionConfidence, setExpressionConfidence] = useState(0);
   const turnConfirmRef = useRef(0);
   const livenessIntervalRef = useRef(null);
 
@@ -323,13 +328,13 @@ export default function StudentAttendance() {
     scanFace();
   }, [scanFace]);
 
-  // --- Liveness detection (jaw geometry head turn) ---
+  // --- Liveness detection (facial expression challenge) ---
   const loadFaceModels = useCallback(async () => {
     if (modelsLoaded) return true;
     try {
       setLivenessMessage('Loading face models...');
       await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-      await faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
       setModelsLoaded(true);
       return true;
     } catch (e) {
@@ -338,74 +343,33 @@ export default function StudentAttendance() {
     }
   }, [modelsLoaded]);
 
-  // Compute jaw asymmetry ratio: distance(chin→leftJaw) / distance(chin→rightJaw)
-  // Frontal face: ~1.0 | Head turned left: <0.7 | Head turned right: >1.3
-  // Phone rotation preserves all distances → ratio stays ~1.0
-  const computeJawRatio = useCallback((landmarks) => {
-    const pts = landmarks.positions;
-    const chin = pts[8];    // bottom of chin
-    const jawL = pts[0];    // right edge in camera (person's left)
-    const jawR = pts[16];   // left edge in camera (person's right)
-    const distL = Math.hypot(chin.x - jawL.x, chin.y - jawL.y);
-    const distR = Math.hypot(chin.x - jawR.x, chin.y - jawR.y);
-    return distL / (distR || 1);
-  }, []);
-
-  const detectHeadTurn = useCallback(async () => {
+  const detectExpression = useCallback(async () => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0) return;
     try {
       const det = await faceapi
         .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.4 }))
-        .withFaceLandmarks(true);
+        .withFaceExpressions();
       if (!det) {
         setLivenessMessage('Position your face in the camera');
         turnConfirmRef.current = 0;
+        setExpressionConfidence(0);
         return;
       }
-      const ratio = computeJawRatio(det.landmarks);
 
-      if (challengeStep === 0) {
-        // CENTER: calibrate baseline
-        if (ratio > 0.8 && ratio < 1.2) {
-          turnConfirmRef.current++;
-          if (turnConfirmRef.current >= 5) {
-            centerJawRatioRef.current = ratio;
-            setChallengeStep(1);
-            turnConfirmRef.current = 0;
-            setLivenessMessage('⬅️ Turn your head LEFT — show your RIGHT ear');
-          } else {
-            setLivenessMessage(`Look straight at camera (${turnConfirmRef.current}/5)`);
-          }
-        } else {
-          turnConfirmRef.current = 0;
-          setLivenessMessage('Look straight at the camera');
-        }
-      } else if (challengeStep === 1) {
-        // LEFT TURN: ratio should DECREASE (left jaw compresses)
-        const center = centerJawRatioRef.current || 1.0;
-        const diff = center - ratio;
-        if (diff > JAW_TURN_THRESHOLD) {
-          turnConfirmRef.current++;
-          if (turnConfirmRef.current >= 4) {
-            setChallengeStep(2);
-            turnConfirmRef.current = 0;
-            setLivenessMessage('➡️ Now turn your head RIGHT — show your LEFT ear');
-          } else {
-            setLivenessMessage(`⬅️ Good! Hold... (${turnConfirmRef.current}/4)`);
-          }
-        } else {
-          turnConfirmRef.current = 0;
-          setLivenessMessage(`⬅️ Turn MORE to the LEFT (need ${((JAW_TURN_THRESHOLD - diff) * 100).toFixed(0)}% more)`);
-        }
-      } else if (challengeStep === 2) {
-        // RIGHT TURN: ratio should INCREASE
-        const center = centerJawRatioRef.current || 1.0;
-        const diff = ratio - center;
-        if (diff > JAW_TURN_THRESHOLD) {
-          turnConfirmRef.current++;
-          if (turnConfirmRef.current >= 4) {
-            // ALL PASSED!
+      const challenge = EXPRESSION_CHALLENGES[challengeStep];
+      if (!challenge) return;
+
+      const score = det.expressions[challenge.key] || 0;
+      setExpressionConfidence(Math.round(score * 100));
+
+      if (score >= challenge.threshold) {
+        turnConfirmRef.current++;
+        if (turnConfirmRef.current >= 5) {
+          // This expression confirmed!
+          const nextStep = challengeStep + 1;
+          if (nextStep >= EXPRESSION_CHALLENGES.length) {
+            // ALL expressions verified!
             setLivenessVerified(true);
             setLivenessChecking(false);
             if (livenessIntervalRef.current) {
@@ -415,15 +379,20 @@ export default function StudentAttendance() {
             setLivenessMessage('Liveness verified! ✓');
             toast.success('Liveness verified! Proceeding to face scan...');
           } else {
-            setLivenessMessage(`➡️ Good! Hold... (${turnConfirmRef.current}/4)`);
+            setChallengeStep(nextStep);
+            turnConfirmRef.current = 0;
+            setExpressionConfidence(0);
+            setLivenessMessage(EXPRESSION_CHALLENGES[nextStep].label);
           }
         } else {
-          turnConfirmRef.current = 0;
-          setLivenessMessage(`➡️ Turn MORE to the RIGHT (need ${((JAW_TURN_THRESHOLD - diff) * 100).toFixed(0)}% more)`);
+          setLivenessMessage(`${challenge.emoji} Great! Hold it... (${turnConfirmRef.current}/5)`);
         }
+      } else {
+        turnConfirmRef.current = 0;
+        setLivenessMessage(`${challenge.label} (${Math.round(score * 100)}% detected)`);
       }
     } catch { /* silently handle */ }
-  }, [challengeStep, computeJawRatio]);
+  }, [challengeStep]);
 
   const startLivenessCheck = useCallback(async () => {
     const loaded = await loadFaceModels();
@@ -434,10 +403,10 @@ export default function StudentAttendance() {
     setLivenessChecking(true);
     setChallengeStep(0);
     turnConfirmRef.current = 0;
-    centerJawRatioRef.current = null;
-    setLivenessMessage('Look straight at the camera');
-    livenessIntervalRef.current = setInterval(detectHeadTurn, 250);
-  }, [loadFaceModels, detectHeadTurn]);
+    setExpressionConfidence(0);
+    setLivenessMessage(EXPRESSION_CHALLENGES[0].label);
+    livenessIntervalRef.current = setInterval(detectExpression, 300);
+  }, [loadFaceModels, detectExpression]);
 
   // Start liveness when reaching step 3
   useEffect(() => {
@@ -655,45 +624,58 @@ export default function StudentAttendance() {
               </div>
             )}
 
-            {/* Liveness check overlay - head turn challenge */}
+            {/* Liveness check overlay - expression challenge */}
             {step === 3 && cameraReady && !livenessVerified && (
               <div className="absolute inset-0 flex flex-col items-center justify-center z-20">
                 <div className="bg-black/70 backdrop-blur-sm rounded-2xl p-6 text-center max-w-xs">
-                  <div className="w-16 h-16 rounded-full bg-primary-500/20 flex items-center justify-center mx-auto mb-3">
-                    {challengeStep === 0 ? (
-                      <span className="text-3xl">😐</span>
-                    ) : challengeStep === 1 ? (
-                      <span className="text-3xl">⬅️</span>
-                    ) : (
-                      <span className="text-3xl">➡️</span>
-                    )}
+                  <div className="w-20 h-20 rounded-full bg-primary-500/20 flex items-center justify-center mx-auto mb-3">
+                    <span className="text-5xl">
+                      {EXPRESSION_CHALLENGES[challengeStep]?.emoji || '🔒'}
+                    </span>
                   </div>
-                  <h3 className="text-lg font-bold text-white mb-1">Head Turn Challenge</h3>
+                  <h3 className="text-lg font-bold text-white mb-1">Expression Challenge</h3>
                   <p className="text-sm text-surface-300 mb-3">{livenessMessage || 'Loading models...'}</p>
+                  {/* Confidence bar */}
+                  {livenessChecking && (
+                    <div className="mb-3">
+                      <div className="h-2 bg-surface-700 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-200 ${
+                            expressionConfidence >= (EXPRESSION_CHALLENGES[challengeStep]?.threshold * 100 || 40)
+                              ? 'bg-emerald-500' : 'bg-amber-500'
+                          }`}
+                          style={{ width: `${expressionConfidence}%` }}
+                        />
+                      </div>
+                      <p className="text-xs text-surface-500 mt-1">{expressionConfidence}% confidence</p>
+                    </div>
+                  )}
                   {/* Step progress */}
                   <div className="flex items-center justify-center gap-2 mb-3">
-                    {['Center', '⬅ Left', '➡ Right'].map((label, i) => (
-                      <div key={label} className="flex items-center gap-1">
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
+                    {EXPRESSION_CHALLENGES.map((ch, i) => (
+                      <div key={ch.key} className="flex items-center gap-1">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs transition-all duration-300 ${
                           challengeStep > i
                             ? 'bg-emerald-500 text-white scale-110'
                             : challengeStep === i
                               ? 'bg-primary-500 text-white animate-pulse'
                               : 'bg-surface-700 text-surface-400'
                         }`}>
-                          {challengeStep > i ? '✓' : i === 0 ? '😐' : i === 1 ? '⬅' : '➡'}
+                          {challengeStep > i ? '✓' : ch.emoji}
                         </div>
-                        {i < 2 && <div className={`w-4 h-0.5 ${challengeStep > i ? 'bg-emerald-500' : 'bg-surface-600'}`} />}
+                        {i < EXPRESSION_CHALLENGES.length - 1 && (
+                          <div className={`w-4 h-0.5 ${challengeStep > i ? 'bg-emerald-500' : 'bg-surface-600'}`} />
+                        )}
                       </div>
                     ))}
                   </div>
-                  <p className="text-xs text-surface-500 mb-2">Turn until your ears are visible — photos can't do this</p>
+                  <p className="text-xs text-surface-500 mb-2">Photos can't change expressions — only a real face can</p>
                   {!livenessChecking && (
                     <button
                       onClick={startLivenessCheck}
                       className="mt-2 px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white text-sm font-semibold rounded-lg transition-colors"
                     >
-                      🔄 Retry Liveness Check
+                      🔄 Retry
                     </button>
                   )}
                 </div>

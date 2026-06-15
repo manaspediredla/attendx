@@ -10,8 +10,12 @@ import AttendXLogo, { AttendXLogoText } from '../../components/common/AttendXLog
 
 const SCAN_INTERVAL_MS = 600;
 const VERIFY_FRAMES = 3;
-const JAW_TURN_THRESHOLD = 0.25;
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
+const EXPRESSION_CHALLENGES = [
+  { key: 'neutral', label: '😐 Keep a NEUTRAL face', emoji: '😐', threshold: 0.4 },
+  { key: 'happy', label: '😁 Now SMILE widely!', emoji: '😁', threshold: 0.5 },
+  { key: 'surprised', label: '😲 Look SURPRISED!', emoji: '😲', threshold: 0.3 },
+];
 
 function Particles() {
   const particles = useMemo(() =>
@@ -61,13 +65,13 @@ export default function LoginPage() {
   const scanRef = useRef(null);
   const canvasRef = useRef(null);
 
-  // Jaw-geometry liveness state
+  // Expression liveness state
   const [livenessVerified, setLivenessVerified] = useState(false);
   const [livenessChecking, setLivenessChecking] = useState(false);
   const [livenessMessage, setLivenessMessage] = useState('');
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [challengeStep, setChallengeStep] = useState(0);
-  const centerJawRatioRef = useRef(null);
+  const [expressionConfidence, setExpressionConfidence] = useState(0);
   const turnConfirmRef = useRef(0);
   const livenessIntervalRef = useRef(null);
 
@@ -234,81 +238,62 @@ export default function LoginPage() {
   const enrollProgress = Math.min((capturedImages.length / minImages) * 100, 100);
   const [rememberMe, setRememberMe] = useState(false);
 
-  // Jaw-geometry liveness check for login
+  // Expression liveness check for login
   const loadFaceModels = useCallback(async () => {
     if (modelsLoaded) return true;
     try {
       await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-      await faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
       setModelsLoaded(true);
       return true;
     } catch { return false; }
   }, [modelsLoaded]);
 
-  const computeJawRatio = useCallback((landmarks) => {
-    const pts = landmarks.positions;
-    const chin = pts[8];
-    const jawL = pts[0];
-    const jawR = pts[16];
-    const distL = Math.hypot(chin.x - jawL.x, chin.y - jawL.y);
-    const distR = Math.hypot(chin.x - jawR.x, chin.y - jawR.y);
-    return distL / (distR || 1);
-  }, []);
-
-  const detectLoginHeadTurn = useCallback(async () => {
+  const detectLoginExpression = useCallback(async () => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0) return;
     try {
       const det = await faceapi
         .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.4 }))
-        .withFaceLandmarks(true);
-      if (!det) { setLivenessMessage('Position your face in camera'); turnConfirmRef.current = 0; return; }
-      const ratio = computeJawRatio(det.landmarks);
+        .withFaceExpressions();
+      if (!det) { setLivenessMessage('Position your face'); turnConfirmRef.current = 0; setExpressionConfidence(0); return; }
 
-      if (challengeStep === 0) {
-        if (ratio > 0.8 && ratio < 1.2) {
-          turnConfirmRef.current++;
-          if (turnConfirmRef.current >= 5) {
-            centerJawRatioRef.current = ratio;
-            setChallengeStep(1);
-            turnConfirmRef.current = 0;
-            setLivenessMessage('⬅️ Turn LEFT — show your RIGHT ear');
-          } else {
-            setLivenessMessage(`Look straight (${turnConfirmRef.current}/5)`);
-          }
-        } else { turnConfirmRef.current = 0; setLivenessMessage('Look straight at camera'); }
-      } else if (challengeStep === 1) {
-        const diff = (centerJawRatioRef.current || 1.0) - ratio;
-        if (diff > JAW_TURN_THRESHOLD) {
-          turnConfirmRef.current++;
-          if (turnConfirmRef.current >= 4) {
-            setChallengeStep(2); turnConfirmRef.current = 0;
-            setLivenessMessage('➡️ Now turn RIGHT — show your LEFT ear');
-          } else { setLivenessMessage(`⬅️ Hold... (${turnConfirmRef.current}/4)`); }
-        } else { turnConfirmRef.current = 0; setLivenessMessage('⬅️ Turn MORE to the LEFT'); }
-      } else if (challengeStep === 2) {
-        const diff = ratio - (centerJawRatioRef.current || 1.0);
-        if (diff > JAW_TURN_THRESHOLD) {
-          turnConfirmRef.current++;
-          if (turnConfirmRef.current >= 4) {
+      const challenge = EXPRESSION_CHALLENGES[challengeStep];
+      if (!challenge) return;
+      const score = det.expressions[challenge.key] || 0;
+      setExpressionConfidence(Math.round(score * 100));
+
+      if (score >= challenge.threshold) {
+        turnConfirmRef.current++;
+        if (turnConfirmRef.current >= 5) {
+          const nextStep = challengeStep + 1;
+          if (nextStep >= EXPRESSION_CHALLENGES.length) {
             setLivenessVerified(true); setLivenessChecking(false);
             if (livenessIntervalRef.current) { clearInterval(livenessIntervalRef.current); livenessIntervalRef.current = null; }
             setLivenessMessage('Liveness verified! ✓');
             toast.success('Liveness verified!');
-          } else { setLivenessMessage(`➡️ Hold... (${turnConfirmRef.current}/4)`); }
-        } else { turnConfirmRef.current = 0; setLivenessMessage('➡️ Turn MORE to the RIGHT'); }
+          } else {
+            setChallengeStep(nextStep); turnConfirmRef.current = 0; setExpressionConfidence(0);
+            setLivenessMessage(EXPRESSION_CHALLENGES[nextStep].label);
+          }
+        } else {
+          setLivenessMessage(`${challenge.emoji} Great! Hold... (${turnConfirmRef.current}/5)`);
+        }
+      } else {
+        turnConfirmRef.current = 0;
+        setLivenessMessage(`${challenge.label} (${Math.round(score * 100)}%)`);
       }
     } catch { /* silently handle */ }
-  }, [challengeStep, computeJawRatio]);
+  }, [challengeStep]);
 
   const startLoginLivenessCheck = useCallback(async () => {
     const loaded = await loadFaceModels();
     if (!loaded) { setLivenessMessage('⚠️ Models failed. Tap retry.'); return; }
     setLivenessChecking(true);
-    setChallengeStep(0); turnConfirmRef.current = 0; centerJawRatioRef.current = null;
-    setLivenessMessage('Look straight at camera');
-    livenessIntervalRef.current = setInterval(detectLoginHeadTurn, 250);
-  }, [loadFaceModels, detectLoginHeadTurn]);
+    setChallengeStep(0); turnConfirmRef.current = 0; setExpressionConfidence(0);
+    setLivenessMessage(EXPRESSION_CHALLENGES[0].label);
+    livenessIntervalRef.current = setInterval(detectLoginExpression, 300);
+  }, [loadFaceModels, detectLoginExpression]);
 
   useEffect(() => {
     if (faceStep === 'verification' && cameraReady && !livenessVerified && !livenessChecking) {
@@ -521,15 +506,28 @@ export default function LoginPage() {
                 {faceDetected && (
                   <div className="absolute top-3 right-3 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                 )}
-                {/* Liveness check overlay for verification */}
+                {/* Expression challenge overlay for verification */}
                 {faceStep === 'verification' && !livenessVerified && (
                   <div className="absolute inset-0 flex items-center justify-center z-20">
                     <div className="bg-black/70 backdrop-blur-sm rounded-xl p-4 text-center max-w-[220px]">
-                      <div className="text-2xl mb-2">
-                        {challengeStep === 0 ? '😐' : challengeStep === 1 ? '⬅️' : '➡️'}
+                      <div className="text-3xl mb-2">
+                        {EXPRESSION_CHALLENGES[challengeStep]?.emoji || '🔒'}
                       </div>
-                      <p className="text-xs text-surface-300 font-semibold mb-1">Head Turn Challenge</p>
+                      <p className="text-xs text-surface-300 font-semibold mb-1">Expression Challenge</p>
                       <p className="text-xs text-surface-400 mb-2">{livenessMessage || 'Loading...'}</p>
+                      {livenessChecking && (
+                        <div className="mb-2">
+                          <div className="h-1.5 bg-surface-700 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all duration-200 ${
+                                expressionConfidence >= (EXPRESSION_CHALLENGES[challengeStep]?.threshold * 100 || 40)
+                                  ? 'bg-emerald-500' : 'bg-amber-500'
+                              }`}
+                              style={{ width: `${expressionConfidence}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
                       {!livenessChecking && (
                         <button onClick={startLoginLivenessCheck} className="text-xs px-3 py-1.5 bg-primary-500 hover:bg-primary-600 text-white rounded-lg">
                           🔄 Retry
