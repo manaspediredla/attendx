@@ -49,20 +49,20 @@ def _trend_direction(recent_pct, overall_pct):
 def _compute_streak(statuses):
     """Compute the current consecutive streak (present or absent).
 
-    *statuses* is a list of booleans ordered oldest → newest.
+    *statuses* is a list of weighted floats (1.0, 0.5, 0.0) ordered oldest → newest.
     Returns (streak_count, streak_type).
     """
     if not statuses:
         return 0, "none"
 
-    current = statuses[-1]
+    current_present = statuses[-1] > 0
     streak = 0
     for s in reversed(statuses):
-        if s == current:
+        if (s > 0) == current_present:
             streak += 1
         else:
             break
-    return streak, ("present" if current else "absent")
+    return streak, ("present" if current_present else "absent")
 
 
 # ── Main endpoint ─────────────────────────────────────────────────
@@ -206,11 +206,16 @@ def get_predictions():
         summary[risk] += 1
 
         # How many more can they miss and stay >= 75%?
-        needed_for_75 = int(0.75 * projected_total)
-        can_miss = max(0, (projected_total - needed_for_75) - (total - attended))
+        # Using weighted: need 75% of projected_total in weighted attendance
+        needed_weighted = 0.75 * projected_total
+        remaining_budget = needed_weighted - attended  # weighted attendance still needed
+        can_miss = max(0, int(remaining - remaining_budget)) if remaining > 0 else 0
 
         # Streak
         streak_count, streak_type = _compute_streak(full_presence)
+
+        # Actual sessions the student showed up for (full or partial)
+        actually_attended = sum(1 for w in full_presence if w > 0)
 
         predictions.append({
             "student_id": student.roll_number,
@@ -224,7 +229,8 @@ def get_predictions():
             "predicted_pct": predicted_pct,
             "trend": trend,
             "risk_level": risk,
-            "sessions_attended": attended,
+            "sessions_attended": actually_attended,
+            "weighted_attended": round(attended, 1),
             "total_sessions": total,
             "can_miss_more": can_miss,
             "streak_count": streak_count,
