@@ -9,6 +9,7 @@ import AttendXLogo, { AttendXLogoText } from '../../components/common/AttendXLog
 
 const SCAN_INTERVAL_MS = 600;
 const VERIFY_FRAMES = 3;
+const FLASH_BRIGHTNESS_THRESHOLD = 8;
 
 function Particles() {
   const particles = useMemo(() =>
@@ -57,6 +58,12 @@ export default function LoginPage() {
   const streamRef = useRef(null);
   const scanRef = useRef(null);
   const canvasRef = useRef(null);
+
+  // Flash liveness state
+  const [livenessVerified, setLivenessVerified] = useState(false);
+  const [livenessChecking, setLivenessChecking] = useState(false);
+  const [livenessMessage, setLivenessMessage] = useState('');
+  const [flashOverlay, setFlashOverlay] = useState(null);
 
   const stopCamera = useCallback(() => {
     if (scanRef.current) clearInterval(scanRef.current);
@@ -158,6 +165,10 @@ export default function LoginPage() {
         setFaceStep('verification');
         setStep('face');
         setVerifyFrames([]);
+        setLivenessVerified(false);
+        setLivenessChecking(false);
+        setLivenessMessage('');
+        setFlashOverlay(null);
         await startCamera();
         return;
       }
@@ -215,6 +226,78 @@ export default function LoginPage() {
 
   const enrollProgress = Math.min((capturedImages.length / minImages) * 100, 100);
   const [rememberMe, setRememberMe] = useState(false);
+
+  // Flash liveness check for login
+  const getCenterBrightness = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || video.videoWidth === 0) return null;
+    const canvas = document.createElement('canvas');
+    const size = 120;
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    const sx = (video.videoWidth - size) / 2;
+    const sy = (video.videoHeight - size) / 2;
+    ctx.drawImage(video, sx, sy, size, size, 0, 0, size, size);
+    const imageData = ctx.getImageData(0, 0, size, size);
+    const data = imageData.data;
+    let totalBrightness = 0;
+    const pixelCount = data.length / 4;
+    for (let i = 0; i < data.length; i += 4) {
+      totalBrightness += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    }
+    return totalBrightness / pixelCount;
+  }, []);
+
+  const startLoginLivenessCheck = useCallback(async () => {
+    setLivenessChecking(true);
+    setLivenessMessage('Stay still... preparing liveness check');
+    try {
+      setFlashOverlay('dark');
+      setLivenessMessage('🌑 Hold still — analyzing dark lighting...');
+      await new Promise(r => setTimeout(r, 1200));
+      const darkBrightness = getCenterBrightness();
+
+      setFlashOverlay('bright');
+      setLivenessMessage('☀️ Hold still — analyzing bright lighting...');
+      await new Promise(r => setTimeout(r, 1200));
+      const brightBrightness = getCenterBrightness();
+
+      setFlashOverlay(null);
+
+      if (darkBrightness === null || brightBrightness === null) {
+        setLivenessMessage('⚠️ Could not capture frames. Tap to retry.');
+        setLivenessChecking(false);
+        return;
+      }
+
+      const brightnessDiff = brightBrightness - darkBrightness;
+      console.log(`Login flash: dark=${darkBrightness.toFixed(1)}, bright=${brightBrightness.toFixed(1)}, diff=${brightnessDiff.toFixed(1)}`);
+
+      if (brightnessDiff >= FLASH_BRIGHTNESS_THRESHOLD) {
+        setLivenessVerified(true);
+        setLivenessChecking(false);
+        setLivenessMessage('Liveness verified! ✓');
+        toast.success('Liveness verified!');
+      } else {
+        setLivenessChecking(false);
+        setLivenessMessage('❌ Screen/photo detected. Use your real face.');
+        toast.error('Liveness check failed: screen or photo detected');
+      }
+    } catch {
+      setFlashOverlay(null);
+      setLivenessChecking(false);
+      setLivenessMessage('⚠️ Liveness check failed. Tap to retry.');
+    }
+  }, [getCenterBrightness]);
+
+  // Auto-start liveness check when entering face verification
+  useEffect(() => {
+    if (faceStep === 'verification' && cameraReady && !livenessVerified && !livenessChecking) {
+      const timer = setTimeout(startLoginLivenessCheck, 800);
+      return () => clearTimeout(timer);
+    }
+  }, [faceStep, cameraReady, livenessVerified, livenessChecking, startLoginLivenessCheck]);
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden" style={{ background: '#0E1117' }}>
@@ -420,6 +503,32 @@ export default function LoginPage() {
                 {faceDetected && (
                   <div className="absolute top-3 right-3 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                 )}
+                {/* Flash overlays for liveness */}
+                {faceStep === 'verification' && flashOverlay === 'dark' && (
+                  <div className="absolute inset-0 bg-black/90 z-10 transition-all duration-200" />
+                )}
+                {faceStep === 'verification' && flashOverlay === 'bright' && (
+                  <div className="absolute inset-0 bg-white z-10 transition-all duration-200" />
+                )}
+                {/* Liveness check overlay for verification */}
+                {faceStep === 'verification' && !livenessVerified && (
+                  <div className="absolute inset-0 flex items-center justify-center z-20">
+                    <div className="bg-black/70 backdrop-blur-sm rounded-xl p-4 text-center max-w-[200px]">
+                      <div className="text-2xl mb-2">
+                        {flashOverlay === 'dark' ? '🌑' : flashOverlay === 'bright' ? '☀️' : '🔒'}
+                      </div>
+                      <p className="text-xs text-surface-300 mb-2">{livenessMessage || 'Preparing...'}</p>
+                      {!livenessChecking && (
+                        <button
+                          onClick={startLoginLivenessCheck}
+                          className="text-xs px-3 py-1.5 bg-primary-500 hover:bg-primary-600 text-white rounded-lg"
+                        >
+                          🔄 Retry
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {faceStep === 'enrollment' && (
@@ -453,14 +562,21 @@ export default function LoginPage() {
               {faceStep === 'verification' && (
                 <>
                   <div className="text-center">
-                    <p className="text-surface-200 font-semibold text-sm">
-                      Frames: {Math.min(verifyFrames.length, VERIFY_FRAMES)} / {VERIFY_FRAMES}
-                    </p>
-                    <p className="text-surface-500 text-xs mt-1">Look at the camera with good lighting</p>
+                    {livenessVerified ? (
+                      <>
+                        <p className="text-emerald-400 font-semibold text-sm">✓ Liveness Verified</p>
+                        <p className="text-surface-200 font-semibold text-sm mt-1">
+                          Frames: {Math.min(verifyFrames.length, VERIFY_FRAMES)} / {VERIFY_FRAMES}
+                        </p>
+                        <p className="text-surface-500 text-xs mt-1">Look at the camera with good lighting</p>
+                      </>
+                    ) : (
+                      <p className="text-amber-400 text-sm">Complete liveness check first</p>
+                    )}
                   </div>
                   <button
                     onClick={handleVerifySubmit}
-                    disabled={loading || verifyFrames.length < VERIFY_FRAMES}
+                    disabled={loading || verifyFrames.length < VERIFY_FRAMES || !livenessVerified}
                     className="btn-primary w-full py-3"
                   >
                     {loading ? 'Verifying...' : 'Verify Identity'}
