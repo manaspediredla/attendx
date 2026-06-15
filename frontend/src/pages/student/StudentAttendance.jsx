@@ -424,6 +424,24 @@ export default function StudentAttendance() {
         : 'Ready';
 
   return (
+    <>
+      {/* FULL-SCREEN flash overlays for liveness (entire viewport must change) */}
+      {flashOverlay === 'dark' && (
+        <div className="fixed inset-0 bg-black z-[9999] flex items-center justify-center">
+          <div className="text-white text-center">
+            <div className="text-4xl mb-3">🌑</div>
+            <p className="text-sm opacity-75">Analyzing dark lighting...</p>
+          </div>
+        </div>
+      )}
+      {flashOverlay === 'bright' && (
+        <div className="fixed inset-0 bg-white z-[9999] flex items-center justify-center">
+          <div className="text-black text-center">
+            <div className="text-4xl mb-3">☀️</div>
+            <p className="text-sm opacity-75">Analyzing bright lighting...</p>
+          </div>
+        </div>
+      )}
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-3xl mx-auto">
       <h1 className="text-2xl font-extrabold text-surface-900 dark:text-surface-100 mb-6">📸 Mark Attendance</h1>
 
@@ -608,13 +626,7 @@ export default function StudentAttendance() {
               </div>
             )}
 
-            {/* Flash overlay for liveness (covers the video area) */}
-            {flashOverlay === 'dark' && (
-              <div className="absolute inset-0 bg-black/90 z-10 transition-all duration-200" />
-            )}
-            {flashOverlay === 'bright' && (
-              <div className="absolute inset-0 bg-white z-10 transition-all duration-200" />
-            )}
+            {/* Old local flash overlays removed — now using full-screen */}
 
             {/* Liveness check overlay */}
             {step === 3 && cameraReady && !livenessVerified && (
@@ -834,5 +846,6 @@ export default function StudentAttendance() {
         </motion.div>
       )}
     </motion.div>
+    </>
   );
 }

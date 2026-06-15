@@ -126,7 +126,8 @@ export default function LoginPage() {
           });
         }
 
-        if (mode === 'verification' && res.data.face_detected) {
+        // ONLY collect verification frames AFTER liveness is verified
+        if (mode === 'verification' && res.data.face_detected && livenessVerified) {
           setVerifyFrames(prev => {
             const next = [...prev, base64];
             return next.length > 10 ? next.slice(-10) : next;
@@ -134,14 +135,14 @@ export default function LoginPage() {
         }
       } catch { /* ignore scan errors */ }
     }, SCAN_INTERVAL_MS);
-  }, [captureFrame]);
+  }, [captureFrame, livenessVerified]);
 
   useEffect(() => {
-    if ((faceStep === 'enrollment' || faceStep === 'verification') && cameraReady && faceChallengeToken) {
+    if ((faceStep === 'enrollment' || (faceStep === 'verification' && livenessVerified)) && cameraReady && faceChallengeToken) {
       startFaceScan(faceChallengeToken, faceStep);
     }
     return () => { if (scanRef.current) clearInterval(scanRef.current); };
-  }, [faceStep, cameraReady, faceChallengeToken, startFaceScan]);
+  }, [faceStep, cameraReady, faceChallengeToken, startFaceScan, livenessVerified]);
 
   const handleCredentials = async (e) => {
     e.preventDefault();
@@ -301,6 +302,23 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden" style={{ background: '#0E1117' }}>
+      {/* FULL-SCREEN flash overlays for liveness (must cover entire viewport) */}
+      {flashOverlay === 'dark' && (
+        <div className="fixed inset-0 bg-black z-[9999] flex items-center justify-center">
+          <div className="text-white text-center">
+            <div className="text-4xl mb-3">🌑</div>
+            <p className="text-sm opacity-75">Analyzing dark lighting...</p>
+          </div>
+        </div>
+      )}
+      {flashOverlay === 'bright' && (
+        <div className="fixed inset-0 bg-white z-[9999] flex items-center justify-center">
+          <div className="text-black text-center">
+            <div className="text-4xl mb-3">☀️</div>
+            <p className="text-sm opacity-75">Analyzing bright lighting...</p>
+          </div>
+        </div>
+      )}
       {/* ── Looping Video Background ── */}
       <video
         ref={(el) => { if (el) { el.muted = true; el.play().catch(() => {}); } }}
@@ -502,13 +520,6 @@ export default function LoginPage() {
                 <div className={`absolute inset-0 border-2 rounded-2xl pointer-events-none transition-colors duration-300 ${faceDetected ? 'border-emerald-500/50' : 'border-red-500/30'}`} />
                 {faceDetected && (
                   <div className="absolute top-3 right-3 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                )}
-                {/* Flash overlays for liveness */}
-                {faceStep === 'verification' && flashOverlay === 'dark' && (
-                  <div className="absolute inset-0 bg-black/90 z-10 transition-all duration-200" />
-                )}
-                {faceStep === 'verification' && flashOverlay === 'bright' && (
-                  <div className="absolute inset-0 bg-white z-10 transition-all duration-200" />
                 )}
                 {/* Liveness check overlay for verification */}
                 {faceStep === 'verification' && !livenessVerified && (
