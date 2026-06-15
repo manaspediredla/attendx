@@ -1,18 +1,55 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <title>ATTENDX</title>
-    <script type="text/javascript">
-      // SPA redirect for GitHub Pages
-      // Redirects all 404s back to index.html with the path preserved in the URL
-      var repo = '/attendx';
-      var fullPath = window.location.pathname;
-      // Store the intended path so the SPA can route correctly
-      sessionStorage.setItem('spa-redirect-path', fullPath);
-      // Redirect to the root of the app
-      window.location.replace(repo + '/');
-    </script>
-  </head>
-  <body></body>
+<html lang="en" class="dark">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/png" href="./attendx-logo.png" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description"
+    content="ATTENDX — Intelligent Presence Verification Platform with AI-powered face biometrics, GPS validation, and campus verification." />
+  <meta name="theme-color" content="#0E1117" />
+  <title>ATTENDX</title>
+  <script>
+    // Prevent flash: apply saved theme (default=dark)
+    const theme = localStorage.getItem('attendx-theme');
+    if (theme === 'light') {
+      document.documentElement.classList.remove('dark');
+    } else {
+      document.documentElement.classList.add('dark');
+    }
+  </script>
+  <script type="text/javascript">
+    // GitHub Pages SPA redirect handler — restore path from 404.html redirect
+    (function() {
+      var redirectPath = sessionStorage.getItem('spa-redirect-path');
+      if (redirectPath) {
+        sessionStorage.removeItem('spa-redirect-path');
+        // Only restore if it's a valid app path (not just /attendx/)
+        var base = '/attendx';
+        var subPath = redirectPath.replace(base, '');
+        if (subPath && subPath !== '/') {
+          window.history.replaceState(null, null, redirectPath);
+        }
+      }
+    })();
+  </script>
+  <style>
+    html.dark,
+    html.dark body {
+      background: #0E1117;
+    }
+
+    html:not(.dark),
+    html:not(.dark) body {
+      background: #F8F9FB;
+    }
+  </style>
+  <script type="module" crossorigin src="/attendx/assets/index-DlcxUjKN.js"></script>
+  <link rel="stylesheet" crossorigin href="/attendx/assets/index-B7PfiP3q.css">
+</head>
+
+<body>
+  <div id="root"></div>
+</body>
+
 </html>
