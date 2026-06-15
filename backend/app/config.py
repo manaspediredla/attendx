@@ -22,15 +22,11 @@ class Config:
     DB_PASSWORD = os.getenv("DB_PASSWORD", "")
     DB_NAME = os.getenv("DB_NAME", "attendance_db")
 
-    # Use MYSQL_URL (Railway) or DATABASE_URL (other hosts) or build from individual vars
-    _database_url = (
-        os.getenv("MYSQL_URL")
-        or os.getenv("DATABASE_URL")
-        or f"mysql+pymysql://{DB_USER}:{quote_plus(DB_PASSWORD)}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    # Use DATABASE_URL if provided (Render, Railway, etc.), else build MySQL URI
+    _database_url = os.getenv(
+        "DATABASE_URL",
+        f"mysql+pymysql://{DB_USER}:{quote_plus(DB_PASSWORD)}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     )
-    # Railway uses mysql:// but SQLAlchemy/PyMySQL needs mysql+pymysql://
-    if _database_url.startswith("mysql://"):
-        _database_url = _database_url.replace("mysql://", "mysql+pymysql://", 1)
     # Render uses postgres:// but SQLAlchemy requires postgresql://
     if _database_url.startswith("postgres://"):
         _database_url = _database_url.replace("postgres://", "postgresql://", 1)
