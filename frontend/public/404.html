@@ -4,17 +4,14 @@
     <meta charset="utf-8">
     <title>ATTENDX</title>
     <script type="text/javascript">
-      // Single Page App redirect for GitHub Pages
-      // https://github.com/rafgraph/spa-github-pages
-      var pathSegmentsToKeep = 1;
-      var l = window.location;
-      l.replace(
-        l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') +
-        l.pathname.split('/').slice(0, 1 + pathSegmentsToKeep).join('/') + '/?/' +
-        l.pathname.slice(1).split('/').slice(pathSegmentsToKeep).join('/').replace(/&/g, '~and~') +
-        (l.search ? '&' + l.search.slice(1).replace(/&/g, '~and~') : '') +
-        l.hash
-      );
+      // SPA redirect for GitHub Pages
+      // Redirects all 404s back to index.html with the path preserved in the URL
+      var repo = '/attendx';
+      var fullPath = window.location.pathname;
+      // Store the intended path so the SPA can route correctly
+      sessionStorage.setItem('spa-redirect-path', fullPath);
+      // Redirect to the root of the app
+      window.location.replace(repo + '/');
     </script>
   </head>
   <body></body>

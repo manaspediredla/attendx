@@ -19,17 +19,19 @@
     }
   </script>
   <script type="text/javascript">
-    // GitHub Pages SPA redirect handler
-    (function(l) {
-      if (l.search[1] === '/' ) {
-        var decoded = l.search.slice(1).split('&').map(function(s) {
-          return s.replace(/~and~/g, '&')
-        }).join('?');
-        window.history.replaceState(null, null,
-          l.pathname.slice(0, -1) + decoded + l.hash
-        );
+    // GitHub Pages SPA redirect handler — restore path from 404.html redirect
+    (function() {
+      var redirectPath = sessionStorage.getItem('spa-redirect-path');
+      if (redirectPath) {
+        sessionStorage.removeItem('spa-redirect-path');
+        // Only restore if it's a valid app path (not just /attendx/)
+        var base = '/attendx';
+        var subPath = redirectPath.replace(base, '');
+        if (subPath && subPath !== '/') {
+          window.history.replaceState(null, null, redirectPath);
+        }
       }
-    }(window.location))
+    })();
   </script>
   <style>
     html.dark,
