@@ -10,7 +10,7 @@ export default function LocationManagement() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editItem, setEditItem] = useState(null);
-  const [form, setForm] = useState({ name: '', city_name: '', latitude: '', longitude: '', radius_meters: 250 });
+  const [form, setForm] = useState({ name: '', latitude: '', longitude: '', radius_meters: 250 });
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
@@ -40,7 +40,7 @@ export default function LocationManagement() {
   };
 
   const resetForm = () => {
-    setForm({ name: '', city_name: '', latitude: '', longitude: '', radius_meters: 250 });
+    setForm({ name: '', latitude: '', longitude: '', radius_meters: 250 });
     setSearchQuery('');
     setSearchResults([]);
   };
@@ -127,7 +127,6 @@ export default function LocationManagement() {
     setEditItem(loc);
     setForm({
       name: loc.name,
-      city_name: loc.city_name || '',
       latitude: String(loc.latitude),
       longitude: String(loc.longitude),
       radius_meters: loc.radius_meters,
@@ -161,7 +160,7 @@ export default function LocationManagement() {
               </div>
             </div>
             <div className="space-y-1 text-sm text-surface-600 dark:text-surface-400  mb-4">
-              {loc.city_name && <p>🏙️ City: {loc.city_name}</p>}
+
               <p>📐 Lat: {loc.latitude}, Lng: {loc.longitude}</p>
               <p>🎯 Radius: {loc.radius_meters}m</p>
             </div>
@@ -189,10 +188,7 @@ export default function LocationManagement() {
             <label className="block text-sm font-medium text-surface-700 dark:text-surface-300  mb-1.5">Location Name</label>
             <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} className="input-field" placeholder="e.g., Hyderabad Campus" required />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-surface-700 dark:text-surface-300  mb-1.5">City Name</label>
-            <input type="text" value={form.city_name} onChange={e => setForm({ ...form, city_name: e.target.value })} className="input-field" placeholder="e.g., Hyderabad" />
-          </div>
+
 
           <div className="rounded-xl border border-border  p-4 space-y-3 bg-surface-50/50 bg-surface-800/30">
             <p className="text-sm font-semibold text-surface-700 dark:text-surface-200 ">Find coordinates</p>
