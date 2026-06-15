@@ -292,8 +292,6 @@ def send_warnings():
         student_ids  – specific internal student IDs to warn (overrides risk filter)
     """
     from app.models.notification import Notification
-    from flask_mail import Message as MailMessage
-    from app.extensions import mail
 
     teacher_id = int(get_jwt_identity())
     teacher = User.query.get(teacher_id)
@@ -335,8 +333,6 @@ def send_warnings():
             student_records[s.id] = []
 
     # ── 3. Identify at-risk students and send warnings ────────────
-    emails_sent = 0
-    emails_failed = 0
     notifications_created = 0
     students_warned = []
 
@@ -387,44 +383,6 @@ def send_warnings():
         db.session.add(notification)
         notifications_created += 1
 
-        # ── Send email ────────────────────────────────────────────
-        try:
-            email_body = f"""Dear {student.user.name},
-
-{email_cfg['intro']}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Student:           {student.user.name}
-  Roll Number:       {student.roll_number}
-  Department:        {student.department}
-  Section:           {student.section}
-  College:           {student.college_name or 'N/A'}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Current Attendance:  {current_pct}%
-  Classes Attended:    {attended} / {total_sessions}
-  Classes Missed:      {absent}
-  Can Still Miss:      {can_miss} more class(es)
-  Risk Level:          {risk.upper()}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-{email_cfg['action']}
-
-If you believe this is an error, please contact your teacher or department administrator.
-
-Regards,
-{teacher_name}
-AttendX — Smart Attendance Management System
-"""
-            msg = MailMessage(
-                subject=email_cfg["subject"],
-                recipients=[student.user.email],
-                body=email_body,
-            )
-            mail.send(msg)
-            emails_sent += 1
-        except Exception as e:
-            emails_failed += 1
-
         students_warned.append({
             "name": student.user.name,
             "roll_number": student.roll_number,
@@ -435,9 +393,7 @@ AttendX — Smart Attendance Management System
     db.session.commit()
 
     return jsonify({
-        "message": f"Warnings sent to {len(students_warned)} students",
-        "emails_sent": emails_sent,
-        "emails_failed": emails_failed,
+        "message": f"Notifications sent to {len(students_warned)} students",
         "notifications_created": notifications_created,
         "students_warned": students_warned,
     }), 200

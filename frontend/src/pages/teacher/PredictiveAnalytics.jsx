@@ -257,8 +257,8 @@ export default function PredictiveAnalytics() {
       const res = await api.post('/teacher/analytics/send-warnings', payload);
       const d = res.data;
       toast.success(
-        `✅ Warnings sent to ${d.notifications_created} students! (${d.emails_sent} emails sent${d.emails_failed ? `, ${d.emails_failed} failed` : ''})`,
-        { duration: 6000 }
+        `✅ Notifications sent to ${d.notifications_created} at-risk students!`,
+        { duration: 5000 }
       );
       setShowWarningModal(false);
     } catch (err) {
@@ -569,7 +569,7 @@ export default function PredictiveAnalytics() {
               </div>
               <div>
                 <h3 className="text-lg font-bold text-surface-900 dark:text-surface-100">Send Attendance Warnings</h3>
-                <p className="text-xs text-surface-500">Email + In-app notification</p>
+                <p className="text-xs text-surface-500">In-app notification</p>
               </div>
             </div>
 
