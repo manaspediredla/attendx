@@ -409,8 +409,9 @@ def get_student_stats(student_id):
     suspicious = sum(1 for r in records if (r.final_attendance_status or r.status) == "suspicious")
     absent = sum(1 for r in records if (r.final_attendance_status or r.status) == "absent")
 
-    present = full + partial
-    percentage = round((present / total) * 100, 2) if total > 0 else 0.0
+    # Weighted calculation: full = 1.0, partial = 0.5, absent/suspicious = 0
+    weighted_present = full + (partial * 0.5)
+    percentage = round((weighted_present / total) * 100, 2) if total > 0 else 0.0
 
     subject_stats = {}
     for record in records:
@@ -425,8 +426,8 @@ def get_student_stats(student_id):
 
     for subj in subject_stats:
         s = subject_stats[subj]
-        s["present"] = s["full"] + s["partial"]
-        s["percentage"] = round((s["present"] / s["total"]) * 100, 2) if s["total"] > 0 else 0.0
+        s["weighted_present"] = s["full"] + (s["partial"] * 0.5)
+        s["percentage"] = round((s["weighted_present"] / s["total"]) * 100, 2) if s["total"] > 0 else 0.0
 
     return {
         "total_classes": total,
@@ -434,7 +435,7 @@ def get_student_stats(student_id):
         "partial": partial,
         "suspicious": suspicious,
         "absent": absent,
-        "present": present,
+        "present": full + partial,
         "percentage": percentage,
         "attendance_percentage": percentage,
         "subject_wise": subject_stats,
@@ -443,16 +444,18 @@ def get_student_stats(student_id):
 
 def _attendance_percentage_for_group(students):
     """Calculate attendance percentage for a group of students."""
-    present = 0
+    weighted_present = 0
     total = 0
     for student in students:
         records = AttendanceRecord.query.filter_by(student_id=student.id).all()
         for r in records:
             total += 1
             status = r.final_attendance_status or r.status
-            if status in ("full", "partial"):
-                present += 1
-    return round((present / total) * 100, 2) if total > 0 else 0
+            if status == "full":
+                weighted_present += 1
+            elif status == "partial":
+                weighted_present += 0.5
+    return round((weighted_present / total) * 100, 2) if total > 0 else 0
 
 
 def get_dashboard_stats(college=None, city=None, department=None, section=None, subject=None):
