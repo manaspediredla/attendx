@@ -201,8 +201,12 @@ export default function TeacherReports() {
                             <p className="font-mono text-surface-800 dark:text-surface-300">{fmt(s.attendance_window_start)}</p>
                           </div>
                           <div className="text-center min-w-[50px]">
-                            <p className="text-xs text-surface-600 dark:text-surface-400">Present</p>
-                            <p className="font-bold text-emerald-400">{(s.full_count || 0) + (s.partial_count || 0)}</p>
+                            <p className="text-xs text-surface-600 dark:text-surface-400">Full</p>
+                            <p className="font-bold text-emerald-400">{s.full_count || 0}</p>
+                          </div>
+                          <div className="text-center min-w-[50px]">
+                            <p className="text-xs text-surface-600 dark:text-surface-400">Partial</p>
+                            <p className="font-bold text-amber-400">{s.partial_count || 0}</p>
                           </div>
                           <div className="text-center min-w-[50px]">
                             <p className="text-xs text-surface-600 dark:text-surface-400">Absent</p>
