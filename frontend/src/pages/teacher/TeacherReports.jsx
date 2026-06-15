@@ -60,7 +60,7 @@ export default function TeacherReports() {
   useEffect(() => {
     if (!user) return;
     setLoadingSessions(true);
-    const params = new URLSearchParams({ page, per_page: 15, teacher_id: user.id, status: 'completed' });
+    const params = new URLSearchParams({ page, per_page: 15, teacher_id: user.id });
     api.get(`/attendance/sessions?${params}`)
       .then(r => {
         setSessions(r.data.sessions || []);
