@@ -12,9 +12,8 @@ import {
 const DEFAULT_MIN_ACCURACY = 45;
 const SCAN_INTERVAL_MS = 700;
 const MATCH_STREAK_REQUIRED = 2;
-// Head-turn challenge thresholds
-const HEAD_TURN_THRESHOLD = 0.08; // min symmetry change required (photo can't produce this)
-const CHALLENGE_STEPS = ['center', 'left', 'right']; // look center, turn left, turn right
+// Flash-based liveness: minimum brightness change required (real face reflects screen light)
+const FLASH_BRIGHTNESS_THRESHOLD = 8;
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 
 export default function StudentAttendance() {
@@ -55,10 +54,7 @@ export default function StudentAttendance() {
   const [livenessVerified, setLivenessVerified] = useState(false);
   const [livenessChecking, setLivenessChecking] = useState(false);
   const [livenessMessage, setLivenessMessage] = useState('');
-  const [modelsLoaded, setModelsLoaded] = useState(false);
-  const [challengeStep, setChallengeStep] = useState(0); // 0=center, 1=left, 2=right
-  const [challengeProgress, setChallengeProgress] = useState(0); // frames matching current challenge
-  const centerSymmetryRef = useRef(null); // baseline symmetry when looking straight
+  const [flashOverlay, setFlashOverlay] = useState(null); // null, 'dark', 'bright'
   const livenessIntervalRef = useRef(null);
 
   useEffect(() => {
@@ -323,137 +319,78 @@ export default function StudentAttendance() {
     scanFace();
   }, [scanFace]);
 
-  // --- Liveness detection (head-turn challenge) ---
-  const loadFaceModels = useCallback(async () => {
-    if (modelsLoaded) return true;
-    try {
-      setLivenessMessage('Loading liveness models...');
-      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-      await faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL);
-      setModelsLoaded(true);
-      return true;
-    } catch (e) {
-      console.error('Failed to load face-api models:', e);
-      setLivenessMessage('Failed to load liveness models');
-      return false;
-    }
-  }, [modelsLoaded]);
-
-  const computeFaceSymmetry = (landmarks) => {
-    // Face symmetry = nose_x relative to eye centers
-    // This ratio changes when you turn your head but stays CONSTANT for a photo
-    const leftEye = landmarks.getLeftEye();
-    const rightEye = landmarks.getRightEye();
-    const nose = landmarks.getNose();
-    const leCx = leftEye.reduce((s, p) => s + p.x, 0) / leftEye.length;
-    const reCx = rightEye.reduce((s, p) => s + p.x, 0) / rightEye.length;
-    const noseTip = nose[nose.length - 1]; // bottom of nose
-    const eyeSpan = reCx - leCx;
-    if (eyeSpan <= 0) return 0.5;
-    return (noseTip.x - leCx) / eyeSpan; // 0.5 = centered, <0.5 = looking left, >0.5 = looking right
-  };
-
-  const detectHeadTurn = useCallback(async () => {
+  // --- Liveness detection (screen flash challenge) ---
+  const getCenterBrightness = useCallback(() => {
     const video = videoRef.current;
-    if (!video || video.videoWidth === 0) return;
-
-    try {
-      const detection = await faceapi
-        .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.4 }))
-        .withFaceLandmarks(true);
-
-      if (!detection) {
-        setLivenessMessage('Position your face in the camera');
-        setChallengeProgress(0);
-        return;
-      }
-
-      const sym = computeFaceSymmetry(detection.landmarks);
-
-      if (challengeStep === 0) {
-        // Step 1: Look straight — calibrate baseline
-        setChallengeProgress(prev => {
-          const next = prev + 1;
-          if (next >= 5) {
-            // After 5 frames looking straight, record baseline and move to LEFT
-            centerSymmetryRef.current = sym;
-            setChallengeStep(1);
-            setLivenessMessage('⬅️ Now turn your head LEFT');
-            return 0;
-          }
-          setLivenessMessage(`Look straight at the camera (${next}/5)`);
-          return next;
-        });
-      } else if (challengeStep === 1) {
-        // Step 2: Turn LEFT — nose should shift left (symmetry decreases)
-        const baseline = centerSymmetryRef.current || 0.5;
-        const diff = baseline - sym; // positive when turning left
-        if (diff > HEAD_TURN_THRESHOLD) {
-          setChallengeProgress(prev => {
-            const next = prev + 1;
-            if (next >= 3) {
-              setChallengeStep(2);
-              setLivenessMessage('➡️ Now turn your head RIGHT');
-              return 0;
-            }
-            setLivenessMessage(`⬅️ Good! Hold left... (${next}/3)`);
-            return next;
-          });
-        } else {
-          setChallengeProgress(0);
-          setLivenessMessage('⬅️ Turn your head more to the LEFT');
-        }
-      } else if (challengeStep === 2) {
-        // Step 3: Turn RIGHT — nose should shift right (symmetry increases)
-        const baseline = centerSymmetryRef.current || 0.5;
-        const diff = sym - baseline; // positive when turning right
-        if (diff > HEAD_TURN_THRESHOLD) {
-          setChallengeProgress(prev => {
-            const next = prev + 1;
-            if (next >= 3) {
-              // All challenges passed!
-              setLivenessVerified(true);
-              setLivenessChecking(false);
-              setLivenessMessage('Liveness verified! ✓');
-              if (livenessIntervalRef.current) {
-                clearInterval(livenessIntervalRef.current);
-                livenessIntervalRef.current = null;
-              }
-              toast.success('Liveness verified! Proceeding to face scan...');
-              return 0;
-            }
-            setLivenessMessage(`➡️ Good! Hold right... (${next}/3)`);
-            return next;
-          });
-        } else {
-          setChallengeProgress(0);
-          setLivenessMessage('➡️ Turn your head more to the RIGHT');
-        }
-      }
-    } catch {
-      // Silently handle detection errors
+    if (!video || video.videoWidth === 0) return null;
+    const canvas = document.createElement('canvas');
+    const size = 120;
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    // Capture center region of the video
+    const sx = (video.videoWidth - size) / 2;
+    const sy = (video.videoHeight - size) / 2;
+    ctx.drawImage(video, sx, sy, size, size, 0, 0, size, size);
+    const imageData = ctx.getImageData(0, 0, size, size);
+    const data = imageData.data;
+    let totalBrightness = 0;
+    const pixelCount = data.length / 4;
+    for (let i = 0; i < data.length; i += 4) {
+      // Luminance: 0.299R + 0.587G + 0.114B
+      totalBrightness += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
     }
-  }, [challengeStep]);
+    return totalBrightness / pixelCount;
+  }, []);
 
   const startLivenessCheck = useCallback(async () => {
-    const loaded = await loadFaceModels();
-    if (!loaded) {
-      setLivenessMessage('Retrying model load...');
-      const retry = await loadFaceModels();
-      if (!retry) {
-        setLivenessMessage('⚠️ Liveness models failed. Tap to retry.');
+    setLivenessChecking(true);
+    setLivenessMessage('Stay still... preparing liveness check');
+
+    try {
+      // Phase 1: DARK — dim the screen area around the camera
+      setFlashOverlay('dark');
+      setLivenessMessage('🌑 Hold still — analyzing dark lighting...');
+      await new Promise(r => setTimeout(r, 1200));
+      const darkBrightness = getCenterBrightness();
+
+      // Phase 2: BRIGHT — flash screen to white
+      setFlashOverlay('bright');
+      setLivenessMessage('☀️ Hold still — analyzing bright lighting...');
+      await new Promise(r => setTimeout(r, 1200));
+      const brightBrightness = getCenterBrightness();
+
+      // Phase 3: Analyze
+      setFlashOverlay(null);
+
+      if (darkBrightness === null || brightBrightness === null) {
+        setLivenessMessage('⚠️ Could not capture frames. Tap to retry.');
         setLivenessChecking(false);
-        toast.error('Liveness detection failed to load. Please try again.');
         return;
       }
+
+      const brightnessDiff = brightBrightness - darkBrightness;
+      console.log(`Flash liveness: dark=${darkBrightness.toFixed(1)}, bright=${brightBrightness.toFixed(1)}, diff=${brightnessDiff.toFixed(1)}`);
+
+      if (brightnessDiff >= FLASH_BRIGHTNESS_THRESHOLD) {
+        // Real face — reflected the screen light
+        setLivenessVerified(true);
+        setLivenessChecking(false);
+        setLivenessMessage('Liveness verified! ✓');
+        toast.success('Liveness verified! Proceeding to face scan...');
+      } else {
+        // Screen/photo detected — face brightness didn't change
+        setLivenessChecking(false);
+        setLivenessMessage('❌ Screen/photo detected. Use your real face.');
+        toast.error('Liveness check failed: screen or photo detected');
+      }
+    } catch (err) {
+      console.error('Flash liveness error:', err);
+      setFlashOverlay(null);
+      setLivenessChecking(false);
+      setLivenessMessage('⚠️ Liveness check failed. Tap to retry.');
     }
-    setLivenessChecking(true);
-    setChallengeStep(0);
-    setChallengeProgress(0);
-    centerSymmetryRef.current = null;
-    setLivenessMessage('Look straight at the camera');
-    livenessIntervalRef.current = setInterval(detectHeadTurn, 250);
-  }, [loadFaceModels, detectHeadTurn]);
+  }, [getCenterBrightness]);
 
   // Start liveness when reaching step 3
   useEffect(() => {
@@ -671,39 +608,48 @@ export default function StudentAttendance() {
               </div>
             )}
 
+            {/* Flash overlay for liveness (covers the video area) */}
+            {flashOverlay === 'dark' && (
+              <div className="absolute inset-0 bg-black/90 z-10 transition-all duration-200" />
+            )}
+            {flashOverlay === 'bright' && (
+              <div className="absolute inset-0 bg-white z-10 transition-all duration-200" />
+            )}
+
             {/* Liveness check overlay */}
             {step === 3 && cameraReady && !livenessVerified && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center">
+              <div className="absolute inset-0 flex flex-col items-center justify-center z-20">
                 <div className="bg-black/70 backdrop-blur-sm rounded-2xl p-6 text-center max-w-xs">
                   <div className="w-16 h-16 rounded-full bg-primary-500/20 flex items-center justify-center mx-auto mb-3">
-                    {challengeStep === 0 ? (
-                      <span className="text-3xl">😐</span>
-                    ) : challengeStep === 1 ? (
-                      <span className="text-3xl">⬅️</span>
+                    {flashOverlay === 'dark' ? (
+                      <span className="text-3xl">🌑</span>
+                    ) : flashOverlay === 'bright' ? (
+                      <span className="text-3xl">☀️</span>
                     ) : (
-                      <span className="text-3xl">➡️</span>
+                      <EyeIcon className={`w-8 h-8 text-primary-400 ${livenessChecking ? 'animate-pulse' : ''}`} />
                     )}
                   </div>
                   <h3 className="text-lg font-bold text-white mb-1">Liveness Check</h3>
                   <p className="text-sm text-surface-300 mb-3">{livenessMessage || 'Preparing...'}</p>
-                  {/* Step progress: Center → Left → Right */}
+                  {/* Phase indicator */}
                   <div className="flex items-center justify-center gap-2 mb-3">
-                    {['Center', 'Left', 'Right'].map((label, i) => (
-                      <div key={label} className="flex items-center gap-1">
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
-                          challengeStep > i
-                            ? 'bg-emerald-500 text-white scale-110'
-                            : challengeStep === i
-                              ? 'bg-primary-500 text-white animate-pulse'
-                              : 'bg-surface-700 text-surface-400'
-                        }`}>
-                          {challengeStep > i ? '✓' : i === 0 ? '😐' : i === 1 ? '⬅' : '➡'}
-                        </div>
-                        {i < 2 && <div className={`w-4 h-0.5 ${challengeStep > i ? 'bg-emerald-500' : 'bg-surface-600'}`} />}
-                      </div>
-                    ))}
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
+                      flashOverlay === 'dark' ? 'bg-primary-500 text-white animate-pulse' :
+                      flashOverlay === 'bright' || livenessVerified ? 'bg-emerald-500 text-white' :
+                      'bg-surface-700 text-surface-400'
+                    }`}>
+                      {flashOverlay !== 'dark' && flashOverlay !== null ? '✓' : '🌑'}
+                    </div>
+                    <div className={`w-6 h-0.5 ${flashOverlay === 'bright' || livenessVerified ? 'bg-emerald-500' : 'bg-surface-600'}`} />
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
+                      flashOverlay === 'bright' ? 'bg-primary-500 text-white animate-pulse' :
+                      livenessVerified ? 'bg-emerald-500 text-white' :
+                      'bg-surface-700 text-surface-400'
+                    }`}>
+                      {livenessVerified ? '✓' : '☀️'}
+                    </div>
                   </div>
-                  <p className="text-xs text-surface-500 mb-2">Anti-spoofing — photos can't turn their head</p>
+                  <p className="text-xs text-surface-500 mb-2">Screen light reflection analysis</p>
                   {!livenessChecking && (
                     <button
                       onClick={startLivenessCheck}
