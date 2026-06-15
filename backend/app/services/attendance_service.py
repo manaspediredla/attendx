@@ -55,7 +55,11 @@ def get_session_phase(session, now=None):
 
 
 def sync_session_status(session, now=None):
-    """Auto-transition session status based on current time."""
+    """Auto-transition session status based on current time.
+
+    NOTE: Sessions are NEVER auto-completed. Only teachers can end sessions
+    manually, allowing classes to run overtime if needed.
+    """
     now = now or now_ist()
     phase = get_session_phase(session, now)
 
@@ -65,9 +69,8 @@ def sync_session_status(session, now=None):
         session.status = "active"
     elif phase == "end_window" and session.status != "end_verification":
         session.status = "end_verification"
-    elif phase == "completed" and session.status != "completed":
-        end_session(session.id, auto=True)
-        return session
+    # Sessions stay in 'end_verification' until teacher manually ends them
+    # No auto-completion — teacher must click "End Session"
 
     db.session.commit()
     return session
