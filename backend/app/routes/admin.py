@@ -385,7 +385,14 @@ def geocode_search():
     try:
         resp = http_requests.get(
             "https://nominatim.openstreetmap.org/search",
-            params={"q": query, "format": "json", "limit": 6, "addressdetails": 1},
+            params={
+                "q": query,
+                "format": "json",
+                "limit": 10,
+                "addressdetails": 1,
+                "countrycodes": "in",
+                "dedupe": 1,
+            },
             headers={
                 "User-Agent": "ATTENDX/1.0 (attendance-system)",
                 "Accept-Language": "en",
@@ -393,7 +400,34 @@ def geocode_search():
             timeout=5,
         )
         resp.raise_for_status()
-        return jsonify(resp.json()), 200
+        results = resp.json()
+
+        # If India-only gave few results, also search globally
+        if len(results) < 3:
+            global_resp = http_requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={
+                    "q": query,
+                    "format": "json",
+                    "limit": 10,
+                    "addressdetails": 1,
+                    "dedupe": 1,
+                },
+                headers={
+                    "User-Agent": "ATTENDX/1.0 (attendance-system)",
+                    "Accept-Language": "en",
+                },
+                timeout=5,
+            )
+            global_resp.raise_for_status()
+            # Merge, avoiding duplicates
+            seen_ids = {r["place_id"] for r in results}
+            for r in global_resp.json():
+                if r["place_id"] not in seen_ids:
+                    results.append(r)
+                    seen_ids.add(r["place_id"])
+
+        return jsonify(results[:10]), 200
     except Exception:
         return jsonify([]), 200
 
