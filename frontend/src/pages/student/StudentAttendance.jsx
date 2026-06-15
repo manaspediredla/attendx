@@ -12,11 +12,9 @@ import {
 const DEFAULT_MIN_ACCURACY = 45;
 const SCAN_INTERVAL_MS = 700;
 const MATCH_STREAK_REQUIRED = 2;
-const BLINKS_REQUIRED = 3;
-const BLINK_EAR_THRESHOLD = 0.21;       // absolute EAR below which = eyes closed
-const BLINK_DROP_RATIO = 0.35;          // EAR must drop 35% from baseline
-const CLOSED_FRAMES_REQUIRED = 3;       // eyes must stay closed for 3 consecutive frames (~600ms)
-const BASELINE_FRAMES = 10;             // frames to calibrate EAR baseline
+// Head-turn challenge thresholds
+const HEAD_TURN_THRESHOLD = 0.08; // min symmetry change required (photo can't produce this)
+const CHALLENGE_STEPS = ['center', 'left', 'right']; // look center, turn left, turn right
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 
 export default function StudentAttendance() {
@@ -56,13 +54,11 @@ export default function StudentAttendance() {
   // Liveness detection state
   const [livenessVerified, setLivenessVerified] = useState(false);
   const [livenessChecking, setLivenessChecking] = useState(false);
-  const [blinkCount, setBlinkCount] = useState(0);
   const [livenessMessage, setLivenessMessage] = useState('');
   const [modelsLoaded, setModelsLoaded] = useState(false);
-  const blinkStateRef = useRef('open'); // 'open' or 'closed'
-  const closedFrameCountRef = useRef(0);
-  const earBaselineRef = useRef(null); // calibrated open-eye EAR
-  const earSamplesRef = useRef([]);
+  const [challengeStep, setChallengeStep] = useState(0); // 0=center, 1=left, 2=right
+  const [challengeProgress, setChallengeProgress] = useState(0); // frames matching current challenge
+  const centerSymmetryRef = useRef(null); // baseline symmetry when looking straight
   const livenessIntervalRef = useRef(null);
 
   useEffect(() => {
@@ -327,7 +323,7 @@ export default function StudentAttendance() {
     scanFace();
   }, [scanFace]);
 
-  // --- Liveness detection (blink) ---
+  // --- Liveness detection (head-turn challenge) ---
   const loadFaceModels = useCallback(async () => {
     if (modelsLoaded) return true;
     try {
@@ -343,16 +339,21 @@ export default function StudentAttendance() {
     }
   }, [modelsLoaded]);
 
-  const computeEAR = (eye) => {
-    // Eye Aspect Ratio: (|p2-p6| + |p3-p5|) / (2 * |p1-p4|)
-    const dist = (a, b) => Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
-    const v1 = dist(eye[1], eye[5]);
-    const v2 = dist(eye[2], eye[4]);
-    const h = dist(eye[0], eye[3]);
-    return h > 0 ? (v1 + v2) / (2 * h) : 1;
+  const computeFaceSymmetry = (landmarks) => {
+    // Face symmetry = nose_x relative to eye centers
+    // This ratio changes when you turn your head but stays CONSTANT for a photo
+    const leftEye = landmarks.getLeftEye();
+    const rightEye = landmarks.getRightEye();
+    const nose = landmarks.getNose();
+    const leCx = leftEye.reduce((s, p) => s + p.x, 0) / leftEye.length;
+    const reCx = rightEye.reduce((s, p) => s + p.x, 0) / rightEye.length;
+    const noseTip = nose[nose.length - 1]; // bottom of nose
+    const eyeSpan = reCx - leCx;
+    if (eyeSpan <= 0) return 0.5;
+    return (noseTip.x - leCx) / eyeSpan; // 0.5 = centered, <0.5 = looking left, >0.5 = looking right
   };
 
-  const detectBlink = useCallback(async () => {
+  const detectHeadTurn = useCallback(async () => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0) return;
 
@@ -363,46 +364,54 @@ export default function StudentAttendance() {
 
       if (!detection) {
         setLivenessMessage('Position your face in the camera');
+        setChallengeProgress(0);
         return;
       }
 
-      const landmarks = detection.landmarks;
-      const leftEye = landmarks.getLeftEye();
-      const rightEye = landmarks.getRightEye();
-      const earLeft = computeEAR(leftEye);
-      const earRight = computeEAR(rightEye);
-      const ear = (earLeft + earRight) / 2;
+      const sym = computeFaceSymmetry(detection.landmarks);
 
-      // Phase 1: Calibrate baseline EAR from first N frames
-      if (!earBaselineRef.current) {
-        earSamplesRef.current.push(ear);
-        setLivenessMessage(`Calibrating... Look at the camera (${earSamplesRef.current.length}/${BASELINE_FRAMES})`);
-        if (earSamplesRef.current.length >= BASELINE_FRAMES) {
-          const sorted = [...earSamplesRef.current].sort((a, b) => a - b);
-          // Use median as baseline (robust to outliers)
-          earBaselineRef.current = sorted[Math.floor(sorted.length / 2)];
-          setLivenessMessage(`Ready! Blink your eyes (0/${BLINKS_REQUIRED})`);
+      if (challengeStep === 0) {
+        // Step 1: Look straight — calibrate baseline
+        setChallengeProgress(prev => {
+          const next = prev + 1;
+          if (next >= 5) {
+            // After 5 frames looking straight, record baseline and move to LEFT
+            centerSymmetryRef.current = sym;
+            setChallengeStep(1);
+            setLivenessMessage('⬅️ Now turn your head LEFT');
+            return 0;
+          }
+          setLivenessMessage(`Look straight at the camera (${next}/5)`);
+          return next;
+        });
+      } else if (challengeStep === 1) {
+        // Step 2: Turn LEFT — nose should shift left (symmetry decreases)
+        const baseline = centerSymmetryRef.current || 0.5;
+        const diff = baseline - sym; // positive when turning left
+        if (diff > HEAD_TURN_THRESHOLD) {
+          setChallengeProgress(prev => {
+            const next = prev + 1;
+            if (next >= 3) {
+              setChallengeStep(2);
+              setLivenessMessage('➡️ Now turn your head RIGHT');
+              return 0;
+            }
+            setLivenessMessage(`⬅️ Good! Hold left... (${next}/3)`);
+            return next;
+          });
+        } else {
+          setChallengeProgress(0);
+          setLivenessMessage('⬅️ Turn your head more to the LEFT');
         }
-        return;
-      }
-
-      const baseline = earBaselineRef.current;
-      const dropThreshold = baseline * (1 - BLINK_DROP_RATIO);
-      const isClosed = ear < BLINK_EAR_THRESHOLD && ear < dropThreshold;
-
-      if (isClosed) {
-        closedFrameCountRef.current += 1;
-        if (closedFrameCountRef.current >= CLOSED_FRAMES_REQUIRED && blinkStateRef.current === 'open') {
-          blinkStateRef.current = 'closed';
-        }
-      } else {
-        if (blinkStateRef.current === 'closed') {
-          blinkStateRef.current = 'open';
-          closedFrameCountRef.current = 0;
-          // Blink completed!
-          setBlinkCount(prev => {
-            const newCount = prev + 1;
-            if (newCount >= BLINKS_REQUIRED) {
+      } else if (challengeStep === 2) {
+        // Step 3: Turn RIGHT — nose should shift right (symmetry increases)
+        const baseline = centerSymmetryRef.current || 0.5;
+        const diff = sym - baseline; // positive when turning right
+        if (diff > HEAD_TURN_THRESHOLD) {
+          setChallengeProgress(prev => {
+            const next = prev + 1;
+            if (next >= 3) {
+              // All challenges passed!
               setLivenessVerified(true);
               setLivenessChecking(false);
               setLivenessMessage('Liveness verified! ✓');
@@ -411,27 +420,24 @@ export default function StudentAttendance() {
                 livenessIntervalRef.current = null;
               }
               toast.success('Liveness verified! Proceeding to face scan...');
+              return 0;
             }
-            return newCount;
+            setLivenessMessage(`➡️ Good! Hold right... (${next}/3)`);
+            return next;
           });
+        } else {
+          setChallengeProgress(0);
+          setLivenessMessage('➡️ Turn your head more to the RIGHT');
         }
-        closedFrameCountRef.current = 0;
-      }
-
-      if (earBaselineRef.current && blinkStateRef.current === 'open') {
-        setLivenessMessage(`Blink your eyes slowly! (${Math.min(blinkCount, BLINKS_REQUIRED - 1)}/${BLINKS_REQUIRED})`);
-      } else if (blinkStateRef.current === 'closed') {
-        setLivenessMessage('Hold... detecting blink...');
       }
     } catch {
       // Silently handle detection errors
     }
-  }, [blinkCount]);
+  }, [challengeStep]);
 
   const startLivenessCheck = useCallback(async () => {
     const loaded = await loadFaceModels();
     if (!loaded) {
-      // Retry once
       setLivenessMessage('Retrying model load...');
       const retry = await loadFaceModels();
       if (!retry) {
@@ -442,14 +448,12 @@ export default function StudentAttendance() {
       }
     }
     setLivenessChecking(true);
-    setBlinkCount(0);
-    blinkStateRef.current = 'open';
-    closedFrameCountRef.current = 0;
-    earBaselineRef.current = null;
-    earSamplesRef.current = [];
-    setLivenessMessage('Calibrating... Look at the camera');
-    livenessIntervalRef.current = setInterval(detectBlink, 200);
-  }, [loadFaceModels, detectBlink]);
+    setChallengeStep(0);
+    setChallengeProgress(0);
+    centerSymmetryRef.current = null;
+    setLivenessMessage('Look straight at the camera');
+    livenessIntervalRef.current = setInterval(detectHeadTurn, 250);
+  }, [loadFaceModels, detectHeadTurn]);
 
   // Start liveness when reaching step 3
   useEffect(() => {
@@ -672,23 +676,34 @@ export default function StudentAttendance() {
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <div className="bg-black/70 backdrop-blur-sm rounded-2xl p-6 text-center max-w-xs">
                   <div className="w-16 h-16 rounded-full bg-primary-500/20 flex items-center justify-center mx-auto mb-3">
-                    <EyeIcon className={`w-8 h-8 text-primary-400 ${livenessChecking ? 'animate-pulse' : ''}`} />
+                    {challengeStep === 0 ? (
+                      <span className="text-3xl">😐</span>
+                    ) : challengeStep === 1 ? (
+                      <span className="text-3xl">⬅️</span>
+                    ) : (
+                      <span className="text-3xl">➡️</span>
+                    )}
                   </div>
                   <h3 className="text-lg font-bold text-white mb-1">Liveness Check</h3>
                   <p className="text-sm text-surface-300 mb-3">{livenessMessage || 'Preparing...'}</p>
-                  <div className="flex items-center justify-center gap-3 mb-2">
-                    {Array.from({ length: BLINKS_REQUIRED }).map((_, i) => (
-                      <div
-                        key={i}
-                        className={`w-4 h-4 rounded-full transition-all duration-300 ${
-                          i < blinkCount
-                            ? 'bg-emerald-400 scale-110 shadow-[0_0_8px_rgba(52,211,153,0.6)]'
-                            : 'bg-surface-600 border border-surface-500'
-                        }`}
-                      />
+                  {/* Step progress: Center → Left → Right */}
+                  <div className="flex items-center justify-center gap-2 mb-3">
+                    {['Center', 'Left', 'Right'].map((label, i) => (
+                      <div key={label} className="flex items-center gap-1">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
+                          challengeStep > i
+                            ? 'bg-emerald-500 text-white scale-110'
+                            : challengeStep === i
+                              ? 'bg-primary-500 text-white animate-pulse'
+                              : 'bg-surface-700 text-surface-400'
+                        }`}>
+                          {challengeStep > i ? '✓' : i === 0 ? '😐' : i === 1 ? '⬅' : '➡'}
+                        </div>
+                        {i < 2 && <div className={`w-4 h-0.5 ${challengeStep > i ? 'bg-emerald-500' : 'bg-surface-600'}`} />}
+                      </div>
                     ))}
                   </div>
-                  <p className="text-xs text-surface-500 mb-2">Anti-spoofing verification</p>
+                  <p className="text-xs text-surface-500 mb-2">Anti-spoofing — photos can't turn their head</p>
                   {!livenessChecking && (
                     <button
                       onClick={startLivenessCheck}

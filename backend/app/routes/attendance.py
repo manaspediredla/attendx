@@ -39,40 +39,50 @@ import numpy as np
 attendance_bp = Blueprint("attendance", __name__, url_prefix="/api/attendance")
 
 
-def _anti_spoof_check(frames_b64, min_frames=3, min_variance=3.0):
-    """Check multiple frames for natural face movement.
+def _anti_spoof_check(frames_b64, min_frames=3, min_yaw_variance=0.015):
+    """Check multiple frames for natural head micro-rotations.
 
-    A real person's face moves between frames; a photo on a phone is static.
+    Computes face symmetry (nose position relative to eyes) for each frame.
+    For a photo on a phone, this ratio stays CONSTANT regardless of phone movement.
+    For a real person, natural head micro-rotations cause this ratio to vary.
     Returns (passed: bool, reason: str).
     """
     if not frames_b64 or len(frames_b64) < min_frames:
         return True, "insufficient_frames"  # Skip if not enough frames sent
 
-    centers = []
+    yaw_ratios = []
     for b64 in frames_b64[:6]:  # max 6 frames
         img = decode_base64_image(b64)
         if img is None:
             continue
         # Downscale for speed
         small = img[::2, ::2]
-        locs = face_recognition.face_locations(small, model="hog")
-        if locs:
-            top, right, bottom, left = locs[0]
-            cx = (left + right) / 2
-            cy = (top + bottom) / 2
-            centers.append((cx, cy))
+        landmarks_list = face_recognition.face_landmarks(small)
+        if not landmarks_list:
+            continue
+        lm = landmarks_list[0]
+        # Nose tip (middle point)
+        nose_bridge = lm.get('nose_tip', [])
+        left_eye = lm.get('left_eye', [])
+        right_eye = lm.get('right_eye', [])
+        if not nose_bridge or not left_eye or not right_eye:
+            continue
+        nose_x = nose_bridge[2][0] if len(nose_bridge) > 2 else nose_bridge[0][0]
+        le_cx = sum(p[0] for p in left_eye) / len(left_eye)
+        re_cx = sum(p[0] for p in right_eye) / len(right_eye)
+        eye_span = re_cx - le_cx
+        if eye_span > 0:
+            yaw_ratios.append((nose_x - le_cx) / eye_span)
 
-    if len(centers) < min_frames:
-        return True, "faces_not_detected"  # Can't verify, allow
+    if len(yaw_ratios) < min_frames:
+        return True, "landmarks_not_detected"  # Can't verify, allow
 
-    xs = [c[0] for c in centers]
-    ys = [c[1] for c in centers]
-    variance = np.std(xs) + np.std(ys)
+    yaw_std = float(np.std(yaw_ratios))
 
-    if variance < min_variance:
-        return False, f"static_face_detected (variance={variance:.1f}, min={min_variance})"
+    if yaw_std < min_yaw_variance:
+        return False, f"static_face_detected (yaw_std={yaw_std:.4f}, min={min_yaw_variance})"
 
-    return True, f"motion_ok (variance={variance:.1f})"
+    return True, f"motion_ok (yaw_std={yaw_std:.4f})"
 
 
 def _session_dict(session):
