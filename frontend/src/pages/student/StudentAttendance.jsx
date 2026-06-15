@@ -12,8 +12,9 @@ import {
 const DEFAULT_MIN_ACCURACY = 45;
 const SCAN_INTERVAL_MS = 700;
 const MATCH_STREAK_REQUIRED = 2;
-// Color-based liveness: minimum per-channel color response (auto-exposure immune)
-const COLOR_RESPONSE_THRESHOLD = 2.5;
+// Jaw-geometry liveness: jaw ratio change required for a valid head turn
+// A phone photo preserves distances when rotated, so ratio stays ~1.0
+const JAW_TURN_THRESHOLD = 0.25;
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 
 export default function StudentAttendance() {
@@ -54,7 +55,10 @@ export default function StudentAttendance() {
   const [livenessVerified, setLivenessVerified] = useState(false);
   const [livenessChecking, setLivenessChecking] = useState(false);
   const [livenessMessage, setLivenessMessage] = useState('');
-  const [flashOverlay, setFlashOverlay] = useState(null); // null, 'red', 'green'
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [challengeStep, setChallengeStep] = useState(0); // 0=center, 1=left, 2=right
+  const centerJawRatioRef = useRef(null);
+  const turnConfirmRef = useRef(0);
   const livenessIntervalRef = useRef(null);
 
   useEffect(() => {
@@ -319,81 +323,121 @@ export default function StudentAttendance() {
     scanFace();
   }, [scanFace]);
 
-  // --- Liveness detection (colored light challenge) ---
-  const getCenterRGB = useCallback(() => {
-    const video = videoRef.current;
-    if (!video || video.videoWidth === 0) return null;
-    const canvas = document.createElement('canvas');
-    const size = 150;
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d');
-    const sx = (video.videoWidth - size) / 2;
-    const sy = (video.videoHeight - size) / 2;
-    ctx.drawImage(video, sx, sy, size, size, 0, 0, size, size);
-    const imageData = ctx.getImageData(0, 0, size, size);
-    const data = imageData.data;
-    let totalR = 0, totalG = 0, totalB = 0;
-    const pixelCount = data.length / 4;
-    for (let i = 0; i < data.length; i += 4) {
-      totalR += data[i];
-      totalG += data[i + 1];
-      totalB += data[i + 2];
+  // --- Liveness detection (jaw geometry head turn) ---
+  const loadFaceModels = useCallback(async () => {
+    if (modelsLoaded) return true;
+    try {
+      setLivenessMessage('Loading face models...');
+      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL);
+      setModelsLoaded(true);
+      return true;
+    } catch (e) {
+      console.error('Model load failed:', e);
+      return false;
     }
-    return { r: totalR / pixelCount, g: totalG / pixelCount, b: totalB / pixelCount };
+  }, [modelsLoaded]);
+
+  // Compute jaw asymmetry ratio: distance(chin→leftJaw) / distance(chin→rightJaw)
+  // Frontal face: ~1.0 | Head turned left: <0.7 | Head turned right: >1.3
+  // Phone rotation preserves all distances → ratio stays ~1.0
+  const computeJawRatio = useCallback((landmarks) => {
+    const pts = landmarks.positions;
+    const chin = pts[8];    // bottom of chin
+    const jawL = pts[0];    // right edge in camera (person's left)
+    const jawR = pts[16];   // left edge in camera (person's right)
+    const distL = Math.hypot(chin.x - jawL.x, chin.y - jawL.y);
+    const distR = Math.hypot(chin.x - jawR.x, chin.y - jawR.y);
+    return distL / (distR || 1);
   }, []);
 
-  const startLivenessCheck = useCallback(async () => {
-    setLivenessChecking(true);
-    setLivenessMessage('Stay still... preparing liveness check');
-
+  const detectHeadTurn = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video || video.videoWidth === 0) return;
     try {
-      // Phase 1: RED screen — real face will reflect red light
-      setFlashOverlay('red');
-      setLivenessMessage('🟥 Hold still — red light analysis...');
-      await new Promise(r => setTimeout(r, 1500));
-      const redRGB = getCenterRGB();
-
-      // Phase 2: GREEN screen — real face will reflect green light
-      setFlashOverlay('green');
-      setLivenessMessage('🟩 Hold still — green light analysis...');
-      await new Promise(r => setTimeout(r, 1500));
-      const greenRGB = getCenterRGB();
-
-      setFlashOverlay(null);
-
-      if (!redRGB || !greenRGB) {
-        setLivenessMessage('⚠️ Could not capture frames. Tap to retry.');
-        setLivenessChecking(false);
+      const det = await faceapi
+        .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.4 }))
+        .withFaceLandmarks(true);
+      if (!det) {
+        setLivenessMessage('Position your face in the camera');
+        turnConfirmRef.current = 0;
         return;
       }
+      const ratio = computeJawRatio(det.landmarks);
 
-      // Color response analysis:
-      // Real face under RED light: R channel higher than under GREEN light
-      // Real face under GREEN light: G channel higher than under RED light
-      // Phone screen: channels stay the same regardless of laptop screen color
-      const rResponse = redRGB.r - greenRGB.r; // positive = face got redder under red light
-      const gResponse = greenRGB.g - redRGB.g; // positive = face got greener under green light
-
-      console.log(`Color liveness: redRGB=[${redRGB.r.toFixed(1)},${redRGB.g.toFixed(1)},${redRGB.b.toFixed(1)}] greenRGB=[${greenRGB.r.toFixed(1)},${greenRGB.g.toFixed(1)},${greenRGB.b.toFixed(1)}] rResp=${rResponse.toFixed(2)} gResp=${gResponse.toFixed(2)}`);
-
-      if (rResponse > COLOR_RESPONSE_THRESHOLD && gResponse > COLOR_RESPONSE_THRESHOLD) {
-        setLivenessVerified(true);
-        setLivenessChecking(false);
-        setLivenessMessage('Liveness verified! ✓');
-        toast.success('Liveness verified! Proceeding to face scan...');
-      } else {
-        setLivenessChecking(false);
-        setLivenessMessage('❌ Screen/photo detected. Use your real face.');
-        toast.error('Anti-spoofing failed: no color reflection detected');
+      if (challengeStep === 0) {
+        // CENTER: calibrate baseline
+        if (ratio > 0.8 && ratio < 1.2) {
+          turnConfirmRef.current++;
+          if (turnConfirmRef.current >= 5) {
+            centerJawRatioRef.current = ratio;
+            setChallengeStep(1);
+            turnConfirmRef.current = 0;
+            setLivenessMessage('⬅️ Turn your head LEFT — show your RIGHT ear');
+          } else {
+            setLivenessMessage(`Look straight at camera (${turnConfirmRef.current}/5)`);
+          }
+        } else {
+          turnConfirmRef.current = 0;
+          setLivenessMessage('Look straight at the camera');
+        }
+      } else if (challengeStep === 1) {
+        // LEFT TURN: ratio should DECREASE (left jaw compresses)
+        const center = centerJawRatioRef.current || 1.0;
+        const diff = center - ratio;
+        if (diff > JAW_TURN_THRESHOLD) {
+          turnConfirmRef.current++;
+          if (turnConfirmRef.current >= 4) {
+            setChallengeStep(2);
+            turnConfirmRef.current = 0;
+            setLivenessMessage('➡️ Now turn your head RIGHT — show your LEFT ear');
+          } else {
+            setLivenessMessage(`⬅️ Good! Hold... (${turnConfirmRef.current}/4)`);
+          }
+        } else {
+          turnConfirmRef.current = 0;
+          setLivenessMessage(`⬅️ Turn MORE to the LEFT (need ${((JAW_TURN_THRESHOLD - diff) * 100).toFixed(0)}% more)`);
+        }
+      } else if (challengeStep === 2) {
+        // RIGHT TURN: ratio should INCREASE
+        const center = centerJawRatioRef.current || 1.0;
+        const diff = ratio - center;
+        if (diff > JAW_TURN_THRESHOLD) {
+          turnConfirmRef.current++;
+          if (turnConfirmRef.current >= 4) {
+            // ALL PASSED!
+            setLivenessVerified(true);
+            setLivenessChecking(false);
+            if (livenessIntervalRef.current) {
+              clearInterval(livenessIntervalRef.current);
+              livenessIntervalRef.current = null;
+            }
+            setLivenessMessage('Liveness verified! ✓');
+            toast.success('Liveness verified! Proceeding to face scan...');
+          } else {
+            setLivenessMessage(`➡️ Good! Hold... (${turnConfirmRef.current}/4)`);
+          }
+        } else {
+          turnConfirmRef.current = 0;
+          setLivenessMessage(`➡️ Turn MORE to the RIGHT (need ${((JAW_TURN_THRESHOLD - diff) * 100).toFixed(0)}% more)`);
+        }
       }
-    } catch (err) {
-      console.error('Color liveness error:', err);
-      setFlashOverlay(null);
-      setLivenessChecking(false);
-      setLivenessMessage('⚠️ Liveness check failed. Tap to retry.');
+    } catch { /* silently handle */ }
+  }, [challengeStep, computeJawRatio]);
+
+  const startLivenessCheck = useCallback(async () => {
+    const loaded = await loadFaceModels();
+    if (!loaded) {
+      setLivenessMessage('⚠️ Models failed. Tap retry.');
+      return;
     }
-  }, [getCenterRGB]);
+    setLivenessChecking(true);
+    setChallengeStep(0);
+    turnConfirmRef.current = 0;
+    centerJawRatioRef.current = null;
+    setLivenessMessage('Look straight at the camera');
+    livenessIntervalRef.current = setInterval(detectHeadTurn, 250);
+  }, [loadFaceModels, detectHeadTurn]);
 
   // Start liveness when reaching step 3
   useEffect(() => {
@@ -427,24 +471,6 @@ export default function StudentAttendance() {
         : 'Ready';
 
   return (
-    <>
-      {/* FULL-SCREEN colored overlays for liveness (entire viewport must change) */}
-      {flashOverlay === 'red' && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center" style={{ background: '#FF0000' }}>
-          <div className="text-white text-center">
-            <div className="text-4xl mb-3">🟥</div>
-            <p className="text-sm opacity-90">Red light analysis — stay still...</p>
-          </div>
-        </div>
-      )}
-      {flashOverlay === 'green' && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center" style={{ background: '#00FF00' }}>
-          <div className="text-black text-center">
-            <div className="text-4xl mb-3">🟩</div>
-            <p className="text-sm opacity-90">Green light analysis — stay still...</p>
-          </div>
-        </div>
-      )}
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-3xl mx-auto">
       <h1 className="text-2xl font-extrabold text-surface-900 dark:text-surface-100 mb-6">📸 Mark Attendance</h1>
 
@@ -629,42 +655,39 @@ export default function StudentAttendance() {
               </div>
             )}
 
-            {/* Old local flash overlays removed — now using full-screen */}
-
-            {/* Liveness check overlay */}
+            {/* Liveness check overlay - head turn challenge */}
             {step === 3 && cameraReady && !livenessVerified && (
               <div className="absolute inset-0 flex flex-col items-center justify-center z-20">
                 <div className="bg-black/70 backdrop-blur-sm rounded-2xl p-6 text-center max-w-xs">
                   <div className="w-16 h-16 rounded-full bg-primary-500/20 flex items-center justify-center mx-auto mb-3">
-                    {flashOverlay === 'red' ? (
-                      <span className="text-3xl">🟥</span>
-                    ) : flashOverlay === 'green' ? (
-                      <span className="text-3xl">🟩</span>
+                    {challengeStep === 0 ? (
+                      <span className="text-3xl">😐</span>
+                    ) : challengeStep === 1 ? (
+                      <span className="text-3xl">⬅️</span>
                     ) : (
-                      <EyeIcon className={`w-8 h-8 text-primary-400 ${livenessChecking ? 'animate-pulse' : ''}`} />
+                      <span className="text-3xl">➡️</span>
                     )}
                   </div>
-                  <h3 className="text-lg font-bold text-white mb-1">Liveness Check</h3>
-                  <p className="text-sm text-surface-300 mb-3">{livenessMessage || 'Preparing...'}</p>
-                  {/* Phase indicator */}
+                  <h3 className="text-lg font-bold text-white mb-1">Head Turn Challenge</h3>
+                  <p className="text-sm text-surface-300 mb-3">{livenessMessage || 'Loading models...'}</p>
+                  {/* Step progress */}
                   <div className="flex items-center justify-center gap-2 mb-3">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
-                      flashOverlay === 'red' ? 'bg-red-500 text-white animate-pulse' :
-                      flashOverlay === 'green' || livenessVerified ? 'bg-emerald-500 text-white' :
-                      'bg-surface-700 text-surface-400'
-                    }`}>
-                      {flashOverlay !== 'red' && flashOverlay !== null ? '✓' : '🟥'}
-                    </div>
-                    <div className={`w-6 h-0.5 ${flashOverlay === 'green' || livenessVerified ? 'bg-emerald-500' : 'bg-surface-600'}`} />
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
-                      flashOverlay === 'green' ? 'bg-green-500 text-white animate-pulse' :
-                      livenessVerified ? 'bg-emerald-500 text-white' :
-                      'bg-surface-700 text-surface-400'
-                    }`}>
-                      {livenessVerified ? '✓' : '🟩'}
-                    </div>
+                    {['Center', '⬅ Left', '➡ Right'].map((label, i) => (
+                      <div key={label} className="flex items-center gap-1">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
+                          challengeStep > i
+                            ? 'bg-emerald-500 text-white scale-110'
+                            : challengeStep === i
+                              ? 'bg-primary-500 text-white animate-pulse'
+                              : 'bg-surface-700 text-surface-400'
+                        }`}>
+                          {challengeStep > i ? '✓' : i === 0 ? '😐' : i === 1 ? '⬅' : '➡'}
+                        </div>
+                        {i < 2 && <div className={`w-4 h-0.5 ${challengeStep > i ? 'bg-emerald-500' : 'bg-surface-600'}`} />}
+                      </div>
+                    ))}
                   </div>
-                  <p className="text-xs text-surface-500 mb-2">Color reflection analysis — screens can't reflect light</p>
+                  <p className="text-xs text-surface-500 mb-2">Turn until your ears are visible — photos can't do this</p>
                   {!livenessChecking && (
                     <button
                       onClick={startLivenessCheck}
@@ -849,6 +872,5 @@ export default function StudentAttendance() {
         </motion.div>
       )}
     </motion.div>
-    </>
   );
 }

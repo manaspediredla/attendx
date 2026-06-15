@@ -4,12 +4,14 @@ import { useAuth } from '../../context/AuthContext';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 import api from '../../api/axios';
+import * as faceapi from 'face-api.js';
 import { EyeIcon, EyeSlashIcon } from '@heroicons/react/24/outline';
 import AttendXLogo, { AttendXLogoText } from '../../components/common/AttendXLogo';
 
 const SCAN_INTERVAL_MS = 600;
 const VERIFY_FRAMES = 3;
-const COLOR_RESPONSE_THRESHOLD = 2.5;
+const JAW_TURN_THRESHOLD = 0.25;
+const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 
 function Particles() {
   const particles = useMemo(() =>
@@ -59,11 +61,15 @@ export default function LoginPage() {
   const scanRef = useRef(null);
   const canvasRef = useRef(null);
 
-  // Flash liveness state
+  // Jaw-geometry liveness state
   const [livenessVerified, setLivenessVerified] = useState(false);
   const [livenessChecking, setLivenessChecking] = useState(false);
   const [livenessMessage, setLivenessMessage] = useState('');
-  const [flashOverlay, setFlashOverlay] = useState(null);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [challengeStep, setChallengeStep] = useState(0);
+  const centerJawRatioRef = useRef(null);
+  const turnConfirmRef = useRef(0);
+  const livenessIntervalRef = useRef(null);
 
   const stopCamera = useCallback(() => {
     if (scanRef.current) clearInterval(scanRef.current);
@@ -228,74 +234,82 @@ export default function LoginPage() {
   const enrollProgress = Math.min((capturedImages.length / minImages) * 100, 100);
   const [rememberMe, setRememberMe] = useState(false);
 
-  // Color-based liveness check for login
-  const getCenterRGB = useCallback(() => {
-    const video = videoRef.current;
-    if (!video || video.videoWidth === 0) return null;
-    const canvas = document.createElement('canvas');
-    const size = 150;
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d');
-    const sx = (video.videoWidth - size) / 2;
-    const sy = (video.videoHeight - size) / 2;
-    ctx.drawImage(video, sx, sy, size, size, 0, 0, size, size);
-    const imageData = ctx.getImageData(0, 0, size, size);
-    const data = imageData.data;
-    let totalR = 0, totalG = 0, totalB = 0;
-    const pixelCount = data.length / 4;
-    for (let i = 0; i < data.length; i += 4) {
-      totalR += data[i];
-      totalG += data[i + 1];
-      totalB += data[i + 2];
-    }
-    return { r: totalR / pixelCount, g: totalG / pixelCount, b: totalB / pixelCount };
+  // Jaw-geometry liveness check for login
+  const loadFaceModels = useCallback(async () => {
+    if (modelsLoaded) return true;
+    try {
+      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL);
+      setModelsLoaded(true);
+      return true;
+    } catch { return false; }
+  }, [modelsLoaded]);
+
+  const computeJawRatio = useCallback((landmarks) => {
+    const pts = landmarks.positions;
+    const chin = pts[8];
+    const jawL = pts[0];
+    const jawR = pts[16];
+    const distL = Math.hypot(chin.x - jawL.x, chin.y - jawL.y);
+    const distR = Math.hypot(chin.x - jawR.x, chin.y - jawR.y);
+    return distL / (distR || 1);
   }, []);
 
-  const startLoginLivenessCheck = useCallback(async () => {
-    setLivenessChecking(true);
-    setLivenessMessage('Stay still... preparing liveness check');
+  const detectLoginHeadTurn = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video || video.videoWidth === 0) return;
     try {
-      setFlashOverlay('red');
-      setLivenessMessage('🟥 Hold still — red light analysis...');
-      await new Promise(r => setTimeout(r, 1500));
-      const redRGB = getCenterRGB();
+      const det = await faceapi
+        .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.4 }))
+        .withFaceLandmarks(true);
+      if (!det) { setLivenessMessage('Position your face in camera'); turnConfirmRef.current = 0; return; }
+      const ratio = computeJawRatio(det.landmarks);
 
-      setFlashOverlay('green');
-      setLivenessMessage('🟩 Hold still — green light analysis...');
-      await new Promise(r => setTimeout(r, 1500));
-      const greenRGB = getCenterRGB();
-
-      setFlashOverlay(null);
-
-      if (!redRGB || !greenRGB) {
-        setLivenessMessage('⚠️ Could not capture frames. Tap to retry.');
-        setLivenessChecking(false);
-        return;
+      if (challengeStep === 0) {
+        if (ratio > 0.8 && ratio < 1.2) {
+          turnConfirmRef.current++;
+          if (turnConfirmRef.current >= 5) {
+            centerJawRatioRef.current = ratio;
+            setChallengeStep(1);
+            turnConfirmRef.current = 0;
+            setLivenessMessage('⬅️ Turn LEFT — show your RIGHT ear');
+          } else {
+            setLivenessMessage(`Look straight (${turnConfirmRef.current}/5)`);
+          }
+        } else { turnConfirmRef.current = 0; setLivenessMessage('Look straight at camera'); }
+      } else if (challengeStep === 1) {
+        const diff = (centerJawRatioRef.current || 1.0) - ratio;
+        if (diff > JAW_TURN_THRESHOLD) {
+          turnConfirmRef.current++;
+          if (turnConfirmRef.current >= 4) {
+            setChallengeStep(2); turnConfirmRef.current = 0;
+            setLivenessMessage('➡️ Now turn RIGHT — show your LEFT ear');
+          } else { setLivenessMessage(`⬅️ Hold... (${turnConfirmRef.current}/4)`); }
+        } else { turnConfirmRef.current = 0; setLivenessMessage('⬅️ Turn MORE to the LEFT'); }
+      } else if (challengeStep === 2) {
+        const diff = ratio - (centerJawRatioRef.current || 1.0);
+        if (diff > JAW_TURN_THRESHOLD) {
+          turnConfirmRef.current++;
+          if (turnConfirmRef.current >= 4) {
+            setLivenessVerified(true); setLivenessChecking(false);
+            if (livenessIntervalRef.current) { clearInterval(livenessIntervalRef.current); livenessIntervalRef.current = null; }
+            setLivenessMessage('Liveness verified! ✓');
+            toast.success('Liveness verified!');
+          } else { setLivenessMessage(`➡️ Hold... (${turnConfirmRef.current}/4)`); }
+        } else { turnConfirmRef.current = 0; setLivenessMessage('➡️ Turn MORE to the RIGHT'); }
       }
+    } catch { /* silently handle */ }
+  }, [challengeStep, computeJawRatio]);
 
-      const rResponse = redRGB.r - greenRGB.r;
-      const gResponse = greenRGB.g - redRGB.g;
-      console.log(`Login color: redRGB=[${redRGB.r.toFixed(1)},${redRGB.g.toFixed(1)},${redRGB.b.toFixed(1)}] greenRGB=[${greenRGB.r.toFixed(1)},${greenRGB.g.toFixed(1)},${greenRGB.b.toFixed(1)}] rResp=${rResponse.toFixed(2)} gResp=${gResponse.toFixed(2)}`);
+  const startLoginLivenessCheck = useCallback(async () => {
+    const loaded = await loadFaceModels();
+    if (!loaded) { setLivenessMessage('⚠️ Models failed. Tap retry.'); return; }
+    setLivenessChecking(true);
+    setChallengeStep(0); turnConfirmRef.current = 0; centerJawRatioRef.current = null;
+    setLivenessMessage('Look straight at camera');
+    livenessIntervalRef.current = setInterval(detectLoginHeadTurn, 250);
+  }, [loadFaceModels, detectLoginHeadTurn]);
 
-      if (rResponse > COLOR_RESPONSE_THRESHOLD && gResponse > COLOR_RESPONSE_THRESHOLD) {
-        setLivenessVerified(true);
-        setLivenessChecking(false);
-        setLivenessMessage('Liveness verified! ✓');
-        toast.success('Liveness verified!');
-      } else {
-        setLivenessChecking(false);
-        setLivenessMessage('❌ Screen/photo detected. Use your real face.');
-        toast.error('Anti-spoofing failed: no color reflection detected');
-      }
-    } catch {
-      setFlashOverlay(null);
-      setLivenessChecking(false);
-      setLivenessMessage('⚠️ Liveness check failed. Tap to retry.');
-    }
-  }, [getCenterRGB]);
-
-  // Auto-start liveness check when entering face verification
   useEffect(() => {
     if (faceStep === 'verification' && cameraReady && !livenessVerified && !livenessChecking) {
       const timer = setTimeout(startLoginLivenessCheck, 800);
@@ -305,23 +319,6 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden" style={{ background: '#0E1117' }}>
-      {/* FULL-SCREEN colored overlays for liveness (must cover entire viewport) */}
-      {flashOverlay === 'red' && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center" style={{ background: '#FF0000' }}>
-          <div className="text-white text-center">
-            <div className="text-4xl mb-3">🟥</div>
-            <p className="text-sm opacity-90">Red light analysis — stay still...</p>
-          </div>
-        </div>
-      )}
-      {flashOverlay === 'green' && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center" style={{ background: '#00FF00' }}>
-          <div className="text-black text-center">
-            <div className="text-4xl mb-3">🟩</div>
-            <p className="text-sm opacity-90">Green light analysis — stay still...</p>
-          </div>
-        </div>
-      )}
       {/* ── Looping Video Background ── */}
       <video
         ref={(el) => { if (el) { el.muted = true; el.play().catch(() => {}); } }}
@@ -527,16 +524,14 @@ export default function LoginPage() {
                 {/* Liveness check overlay for verification */}
                 {faceStep === 'verification' && !livenessVerified && (
                   <div className="absolute inset-0 flex items-center justify-center z-20">
-                    <div className="bg-black/70 backdrop-blur-sm rounded-xl p-4 text-center max-w-[200px]">
+                    <div className="bg-black/70 backdrop-blur-sm rounded-xl p-4 text-center max-w-[220px]">
                       <div className="text-2xl mb-2">
-                        {flashOverlay === 'red' ? '🟥' : flashOverlay === 'green' ? '🟩' : '🔒'}
+                        {challengeStep === 0 ? '😐' : challengeStep === 1 ? '⬅️' : '➡️'}
                       </div>
-                      <p className="text-xs text-surface-300 mb-2">{livenessMessage || 'Preparing...'}</p>
+                      <p className="text-xs text-surface-300 font-semibold mb-1">Head Turn Challenge</p>
+                      <p className="text-xs text-surface-400 mb-2">{livenessMessage || 'Loading...'}</p>
                       {!livenessChecking && (
-                        <button
-                          onClick={startLoginLivenessCheck}
-                          className="text-xs px-3 py-1.5 bg-primary-500 hover:bg-primary-600 text-white rounded-lg"
-                        >
+                        <button onClick={startLoginLivenessCheck} className="text-xs px-3 py-1.5 bg-primary-500 hover:bg-primary-600 text-white rounded-lg">
                           🔄 Retry
                         </button>
                       )}
