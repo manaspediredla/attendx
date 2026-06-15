@@ -375,60 +375,61 @@ def delete_location(location_id):
 @admin_bp.route("/geocode", methods=["GET"])
 @super_admin_required
 def geocode_search():
-    """Proxy geocode search to Nominatim with multi-strategy matching."""
+    """Location search using Photon (free, fuzzy matching) with Nominatim fallback."""
     import requests as http_requests
 
     query = request.args.get("q", "").strip()
     if not query:
         return jsonify([]), 200
 
-    headers = {
-        "User-Agent": "ATTENDX/1.0 (attendance-system)",
-        "Accept-Language": "en",
-    }
+    # ── Photon API (free, no key, fuzzy/typo matching) ──────────
+    try:
+        resp = http_requests.get(
+            "https://photon.komoot.io/api/",
+            params={"q": query, "limit": 10, "lang": "en"},
+            headers={"User-Agent": "ATTENDX/1.0"},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        features = resp.json().get("features", [])
 
-    def _search(q, country=None):
-        params = {"q": q, "format": "json", "limit": 10, "addressdetails": 1, "dedupe": 1}
-        if country:
-            params["countrycodes"] = country
-        try:
-            r = http_requests.get(
-                "https://nominatim.openstreetmap.org/search",
-                params=params, headers=headers, timeout=5,
-            )
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            return []
+        results = []
+        for f in features:
+            props = f.get("properties", {})
+            coords = f.get("geometry", {}).get("coordinates", [0, 0])
+            # Build display name from address parts
+            parts = [props.get("name", "")]
+            for key in ("street", "district", "city", "state", "country"):
+                val = props.get(key)
+                if val and val not in parts:
+                    parts.append(val)
+            display = ", ".join(p for p in parts if p)
 
-    seen = {}
-    results = []
+            results.append({
+                "place_id": f"{props.get('osm_type', 'N')}{props.get('osm_id', '')}",
+                "display_name": display,
+                "name": props.get("name", display.split(",")[0]),
+                "lat": str(coords[1]),
+                "lon": str(coords[0]),
+            })
 
-    def _merge(items):
-        for r in items:
-            pid = r.get("place_id")
-            if pid and pid not in seen:
-                seen[pid] = True
-                results.append(r)
+        if results:
+            return jsonify(results), 200
+    except Exception:
+        pass
 
-    # Strategy 1: Exact query, India first
-    _merge(_search(query, "in"))
-
-    # Strategy 2: Exact query globally
-    if len(results) < 5:
-        _merge(_search(query))
-
-    # Strategy 3: Append "India" if not already present
-    if len(results) < 3 and "india" not in query.lower():
-        _merge(_search(f"{query}, India"))
-
-    # Strategy 4: Try partial queries (drop first/last word)
-    words = query.split()
-    if len(results) < 3 and len(words) > 2:
-        _merge(_search(" ".join(words[:-1]), "in"))
-        _merge(_search(" ".join(words[1:]), "in"))
-
-    return jsonify(results[:10]), 200
+    # ── Nominatim fallback ──────────────────────────────────────
+    try:
+        resp = http_requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": query, "format": "json", "limit": 10, "dedupe": 1},
+            headers={"User-Agent": "ATTENDX/1.0", "Accept-Language": "en"},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        return jsonify(resp.json()[:10]), 200
+    except Exception:
+        return jsonify([]), 200
 
 
 # ── Network Management ─────────────────────────────────────────────
