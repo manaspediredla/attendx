@@ -12,8 +12,8 @@ import {
 const DEFAULT_MIN_ACCURACY = 45;
 const SCAN_INTERVAL_MS = 700;
 const MATCH_STREAK_REQUIRED = 2;
-// Flash-based liveness: minimum brightness change required (real face reflects screen light)
-const FLASH_BRIGHTNESS_THRESHOLD = 8;
+// Color-based liveness: minimum per-channel color response (auto-exposure immune)
+const COLOR_RESPONSE_THRESHOLD = 2.5;
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 
 export default function StudentAttendance() {
@@ -54,7 +54,7 @@ export default function StudentAttendance() {
   const [livenessVerified, setLivenessVerified] = useState(false);
   const [livenessChecking, setLivenessChecking] = useState(false);
   const [livenessMessage, setLivenessMessage] = useState('');
-  const [flashOverlay, setFlashOverlay] = useState(null); // null, 'dark', 'bright'
+  const [flashOverlay, setFlashOverlay] = useState(null); // null, 'red', 'green'
   const livenessIntervalRef = useRef(null);
 
   useEffect(() => {
@@ -319,28 +319,28 @@ export default function StudentAttendance() {
     scanFace();
   }, [scanFace]);
 
-  // --- Liveness detection (screen flash challenge) ---
-  const getCenterBrightness = useCallback(() => {
+  // --- Liveness detection (colored light challenge) ---
+  const getCenterRGB = useCallback(() => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0) return null;
     const canvas = document.createElement('canvas');
-    const size = 120;
+    const size = 150;
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext('2d');
-    // Capture center region of the video
     const sx = (video.videoWidth - size) / 2;
     const sy = (video.videoHeight - size) / 2;
     ctx.drawImage(video, sx, sy, size, size, 0, 0, size, size);
     const imageData = ctx.getImageData(0, 0, size, size);
     const data = imageData.data;
-    let totalBrightness = 0;
+    let totalR = 0, totalG = 0, totalB = 0;
     const pixelCount = data.length / 4;
     for (let i = 0; i < data.length; i += 4) {
-      // Luminance: 0.299R + 0.587G + 0.114B
-      totalBrightness += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      totalR += data[i];
+      totalG += data[i + 1];
+      totalB += data[i + 2];
     }
-    return totalBrightness / pixelCount;
+    return { r: totalR / pixelCount, g: totalG / pixelCount, b: totalB / pixelCount };
   }, []);
 
   const startLivenessCheck = useCallback(async () => {
@@ -348,49 +348,52 @@ export default function StudentAttendance() {
     setLivenessMessage('Stay still... preparing liveness check');
 
     try {
-      // Phase 1: DARK — dim the screen area around the camera
-      setFlashOverlay('dark');
-      setLivenessMessage('🌑 Hold still — analyzing dark lighting...');
-      await new Promise(r => setTimeout(r, 1200));
-      const darkBrightness = getCenterBrightness();
+      // Phase 1: RED screen — real face will reflect red light
+      setFlashOverlay('red');
+      setLivenessMessage('🟥 Hold still — red light analysis...');
+      await new Promise(r => setTimeout(r, 1500));
+      const redRGB = getCenterRGB();
 
-      // Phase 2: BRIGHT — flash screen to white
-      setFlashOverlay('bright');
-      setLivenessMessage('☀️ Hold still — analyzing bright lighting...');
-      await new Promise(r => setTimeout(r, 1200));
-      const brightBrightness = getCenterBrightness();
+      // Phase 2: GREEN screen — real face will reflect green light
+      setFlashOverlay('green');
+      setLivenessMessage('🟩 Hold still — green light analysis...');
+      await new Promise(r => setTimeout(r, 1500));
+      const greenRGB = getCenterRGB();
 
-      // Phase 3: Analyze
       setFlashOverlay(null);
 
-      if (darkBrightness === null || brightBrightness === null) {
+      if (!redRGB || !greenRGB) {
         setLivenessMessage('⚠️ Could not capture frames. Tap to retry.');
         setLivenessChecking(false);
         return;
       }
 
-      const brightnessDiff = brightBrightness - darkBrightness;
-      console.log(`Flash liveness: dark=${darkBrightness.toFixed(1)}, bright=${brightBrightness.toFixed(1)}, diff=${brightnessDiff.toFixed(1)}`);
+      // Color response analysis:
+      // Real face under RED light: R channel higher than under GREEN light
+      // Real face under GREEN light: G channel higher than under RED light
+      // Phone screen: channels stay the same regardless of laptop screen color
+      const rResponse = redRGB.r - greenRGB.r; // positive = face got redder under red light
+      const gResponse = greenRGB.g - redRGB.g; // positive = face got greener under green light
 
-      if (brightnessDiff >= FLASH_BRIGHTNESS_THRESHOLD) {
-        // Real face — reflected the screen light
+      console.log(`Color liveness: redRGB=[${redRGB.r.toFixed(1)},${redRGB.g.toFixed(1)},${redRGB.b.toFixed(1)}] greenRGB=[${greenRGB.r.toFixed(1)},${greenRGB.g.toFixed(1)},${greenRGB.b.toFixed(1)}] rResp=${rResponse.toFixed(2)} gResp=${gResponse.toFixed(2)}`);
+
+      if (rResponse > COLOR_RESPONSE_THRESHOLD && gResponse > COLOR_RESPONSE_THRESHOLD) {
         setLivenessVerified(true);
         setLivenessChecking(false);
         setLivenessMessage('Liveness verified! ✓');
         toast.success('Liveness verified! Proceeding to face scan...');
       } else {
-        // Screen/photo detected — face brightness didn't change
         setLivenessChecking(false);
         setLivenessMessage('❌ Screen/photo detected. Use your real face.');
-        toast.error('Liveness check failed: screen or photo detected');
+        toast.error('Anti-spoofing failed: no color reflection detected');
       }
     } catch (err) {
-      console.error('Flash liveness error:', err);
+      console.error('Color liveness error:', err);
       setFlashOverlay(null);
       setLivenessChecking(false);
       setLivenessMessage('⚠️ Liveness check failed. Tap to retry.');
     }
-  }, [getCenterBrightness]);
+  }, [getCenterRGB]);
 
   // Start liveness when reaching step 3
   useEffect(() => {
@@ -425,20 +428,20 @@ export default function StudentAttendance() {
 
   return (
     <>
-      {/* FULL-SCREEN flash overlays for liveness (entire viewport must change) */}
-      {flashOverlay === 'dark' && (
-        <div className="fixed inset-0 bg-black z-[9999] flex items-center justify-center">
+      {/* FULL-SCREEN colored overlays for liveness (entire viewport must change) */}
+      {flashOverlay === 'red' && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center" style={{ background: '#FF0000' }}>
           <div className="text-white text-center">
-            <div className="text-4xl mb-3">🌑</div>
-            <p className="text-sm opacity-75">Analyzing dark lighting...</p>
+            <div className="text-4xl mb-3">🟥</div>
+            <p className="text-sm opacity-90">Red light analysis — stay still...</p>
           </div>
         </div>
       )}
-      {flashOverlay === 'bright' && (
-        <div className="fixed inset-0 bg-white z-[9999] flex items-center justify-center">
+      {flashOverlay === 'green' && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center" style={{ background: '#00FF00' }}>
           <div className="text-black text-center">
-            <div className="text-4xl mb-3">☀️</div>
-            <p className="text-sm opacity-75">Analyzing bright lighting...</p>
+            <div className="text-4xl mb-3">🟩</div>
+            <p className="text-sm opacity-90">Green light analysis — stay still...</p>
           </div>
         </div>
       )}
@@ -633,10 +636,10 @@ export default function StudentAttendance() {
               <div className="absolute inset-0 flex flex-col items-center justify-center z-20">
                 <div className="bg-black/70 backdrop-blur-sm rounded-2xl p-6 text-center max-w-xs">
                   <div className="w-16 h-16 rounded-full bg-primary-500/20 flex items-center justify-center mx-auto mb-3">
-                    {flashOverlay === 'dark' ? (
-                      <span className="text-3xl">🌑</span>
-                    ) : flashOverlay === 'bright' ? (
-                      <span className="text-3xl">☀️</span>
+                    {flashOverlay === 'red' ? (
+                      <span className="text-3xl">🟥</span>
+                    ) : flashOverlay === 'green' ? (
+                      <span className="text-3xl">🟩</span>
                     ) : (
                       <EyeIcon className={`w-8 h-8 text-primary-400 ${livenessChecking ? 'animate-pulse' : ''}`} />
                     )}
@@ -646,22 +649,22 @@ export default function StudentAttendance() {
                   {/* Phase indicator */}
                   <div className="flex items-center justify-center gap-2 mb-3">
                     <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
-                      flashOverlay === 'dark' ? 'bg-primary-500 text-white animate-pulse' :
-                      flashOverlay === 'bright' || livenessVerified ? 'bg-emerald-500 text-white' :
+                      flashOverlay === 'red' ? 'bg-red-500 text-white animate-pulse' :
+                      flashOverlay === 'green' || livenessVerified ? 'bg-emerald-500 text-white' :
                       'bg-surface-700 text-surface-400'
                     }`}>
-                      {flashOverlay !== 'dark' && flashOverlay !== null ? '✓' : '🌑'}
+                      {flashOverlay !== 'red' && flashOverlay !== null ? '✓' : '🟥'}
                     </div>
-                    <div className={`w-6 h-0.5 ${flashOverlay === 'bright' || livenessVerified ? 'bg-emerald-500' : 'bg-surface-600'}`} />
+                    <div className={`w-6 h-0.5 ${flashOverlay === 'green' || livenessVerified ? 'bg-emerald-500' : 'bg-surface-600'}`} />
                     <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
-                      flashOverlay === 'bright' ? 'bg-primary-500 text-white animate-pulse' :
+                      flashOverlay === 'green' ? 'bg-green-500 text-white animate-pulse' :
                       livenessVerified ? 'bg-emerald-500 text-white' :
                       'bg-surface-700 text-surface-400'
                     }`}>
-                      {livenessVerified ? '✓' : '☀️'}
+                      {livenessVerified ? '✓' : '🟩'}
                     </div>
                   </div>
-                  <p className="text-xs text-surface-500 mb-2">Screen light reflection analysis</p>
+                  <p className="text-xs text-surface-500 mb-2">Color reflection analysis — screens can't reflect light</p>
                   {!livenessChecking && (
                     <button
                       onClick={startLivenessCheck}

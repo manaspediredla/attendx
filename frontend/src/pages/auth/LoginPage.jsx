@@ -9,7 +9,7 @@ import AttendXLogo, { AttendXLogoText } from '../../components/common/AttendXLog
 
 const SCAN_INTERVAL_MS = 600;
 const VERIFY_FRAMES = 3;
-const FLASH_BRIGHTNESS_THRESHOLD = 8;
+const COLOR_RESPONSE_THRESHOLD = 2.5;
 
 function Particles() {
   const particles = useMemo(() =>
@@ -228,12 +228,12 @@ export default function LoginPage() {
   const enrollProgress = Math.min((capturedImages.length / minImages) * 100, 100);
   const [rememberMe, setRememberMe] = useState(false);
 
-  // Flash liveness check for login
-  const getCenterBrightness = useCallback(() => {
+  // Color-based liveness check for login
+  const getCenterRGB = useCallback(() => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0) return null;
     const canvas = document.createElement('canvas');
-    const size = 120;
+    const size = 150;
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext('2d');
@@ -242,40 +242,43 @@ export default function LoginPage() {
     ctx.drawImage(video, sx, sy, size, size, 0, 0, size, size);
     const imageData = ctx.getImageData(0, 0, size, size);
     const data = imageData.data;
-    let totalBrightness = 0;
+    let totalR = 0, totalG = 0, totalB = 0;
     const pixelCount = data.length / 4;
     for (let i = 0; i < data.length; i += 4) {
-      totalBrightness += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      totalR += data[i];
+      totalG += data[i + 1];
+      totalB += data[i + 2];
     }
-    return totalBrightness / pixelCount;
+    return { r: totalR / pixelCount, g: totalG / pixelCount, b: totalB / pixelCount };
   }, []);
 
   const startLoginLivenessCheck = useCallback(async () => {
     setLivenessChecking(true);
     setLivenessMessage('Stay still... preparing liveness check');
     try {
-      setFlashOverlay('dark');
-      setLivenessMessage('🌑 Hold still — analyzing dark lighting...');
-      await new Promise(r => setTimeout(r, 1200));
-      const darkBrightness = getCenterBrightness();
+      setFlashOverlay('red');
+      setLivenessMessage('🟥 Hold still — red light analysis...');
+      await new Promise(r => setTimeout(r, 1500));
+      const redRGB = getCenterRGB();
 
-      setFlashOverlay('bright');
-      setLivenessMessage('☀️ Hold still — analyzing bright lighting...');
-      await new Promise(r => setTimeout(r, 1200));
-      const brightBrightness = getCenterBrightness();
+      setFlashOverlay('green');
+      setLivenessMessage('🟩 Hold still — green light analysis...');
+      await new Promise(r => setTimeout(r, 1500));
+      const greenRGB = getCenterRGB();
 
       setFlashOverlay(null);
 
-      if (darkBrightness === null || brightBrightness === null) {
+      if (!redRGB || !greenRGB) {
         setLivenessMessage('⚠️ Could not capture frames. Tap to retry.');
         setLivenessChecking(false);
         return;
       }
 
-      const brightnessDiff = brightBrightness - darkBrightness;
-      console.log(`Login flash: dark=${darkBrightness.toFixed(1)}, bright=${brightBrightness.toFixed(1)}, diff=${brightnessDiff.toFixed(1)}`);
+      const rResponse = redRGB.r - greenRGB.r;
+      const gResponse = greenRGB.g - redRGB.g;
+      console.log(`Login color: redRGB=[${redRGB.r.toFixed(1)},${redRGB.g.toFixed(1)},${redRGB.b.toFixed(1)}] greenRGB=[${greenRGB.r.toFixed(1)},${greenRGB.g.toFixed(1)},${greenRGB.b.toFixed(1)}] rResp=${rResponse.toFixed(2)} gResp=${gResponse.toFixed(2)}`);
 
-      if (brightnessDiff >= FLASH_BRIGHTNESS_THRESHOLD) {
+      if (rResponse > COLOR_RESPONSE_THRESHOLD && gResponse > COLOR_RESPONSE_THRESHOLD) {
         setLivenessVerified(true);
         setLivenessChecking(false);
         setLivenessMessage('Liveness verified! ✓');
@@ -283,14 +286,14 @@ export default function LoginPage() {
       } else {
         setLivenessChecking(false);
         setLivenessMessage('❌ Screen/photo detected. Use your real face.');
-        toast.error('Liveness check failed: screen or photo detected');
+        toast.error('Anti-spoofing failed: no color reflection detected');
       }
     } catch {
       setFlashOverlay(null);
       setLivenessChecking(false);
       setLivenessMessage('⚠️ Liveness check failed. Tap to retry.');
     }
-  }, [getCenterBrightness]);
+  }, [getCenterRGB]);
 
   // Auto-start liveness check when entering face verification
   useEffect(() => {
@@ -302,20 +305,20 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden" style={{ background: '#0E1117' }}>
-      {/* FULL-SCREEN flash overlays for liveness (must cover entire viewport) */}
-      {flashOverlay === 'dark' && (
-        <div className="fixed inset-0 bg-black z-[9999] flex items-center justify-center">
+      {/* FULL-SCREEN colored overlays for liveness (must cover entire viewport) */}
+      {flashOverlay === 'red' && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center" style={{ background: '#FF0000' }}>
           <div className="text-white text-center">
-            <div className="text-4xl mb-3">🌑</div>
-            <p className="text-sm opacity-75">Analyzing dark lighting...</p>
+            <div className="text-4xl mb-3">🟥</div>
+            <p className="text-sm opacity-90">Red light analysis — stay still...</p>
           </div>
         </div>
       )}
-      {flashOverlay === 'bright' && (
-        <div className="fixed inset-0 bg-white z-[9999] flex items-center justify-center">
+      {flashOverlay === 'green' && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center" style={{ background: '#00FF00' }}>
           <div className="text-black text-center">
-            <div className="text-4xl mb-3">☀️</div>
-            <p className="text-sm opacity-75">Analyzing bright lighting...</p>
+            <div className="text-4xl mb-3">🟩</div>
+            <p className="text-sm opacity-90">Green light analysis — stay still...</p>
           </div>
         </div>
       )}
@@ -526,7 +529,7 @@ export default function LoginPage() {
                   <div className="absolute inset-0 flex items-center justify-center z-20">
                     <div className="bg-black/70 backdrop-blur-sm rounded-xl p-4 text-center max-w-[200px]">
                       <div className="text-2xl mb-2">
-                        {flashOverlay === 'dark' ? '🌑' : flashOverlay === 'bright' ? '☀️' : '🔒'}
+                        {flashOverlay === 'red' ? '🟥' : flashOverlay === 'green' ? '🟩' : '🔒'}
                       </div>
                       <p className="text-xs text-surface-300 mb-2">{livenessMessage || 'Preparing...'}</p>
                       {!livenessChecking && (
