@@ -5,10 +5,14 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import ProtectedRoute from './utils/ProtectedRoute';
 import Sidebar from './components/common/Sidebar';
 import Navbar from './components/common/Navbar';
+import AttendXLogo from './components/common/AttendXLogo';
 
 // Auth pages
 import LoginPage from './pages/auth/LoginPage';
 import ChangePasswordPage from './pages/auth/ChangePasswordPage';
+
+// Custom 404
+import NotFoundPage from './pages/NotFoundPage';
 
 // Super Admin pages
 import SuperAdminDashboard from './pages/superadmin/SuperAdminDashboard';
@@ -35,8 +39,26 @@ import AttendanceAnalytics from './pages/student/AttendanceAnalytics';
 import StudentNotifications from './pages/student/StudentNotifications';
 import StudentProfile from './pages/student/StudentProfile';
 
+// Determine basename: /attendx/ for production (GitHub Pages), / for dev
+const BASE = import.meta.env.PROD ? '/attendx' : '';
+
+/** Full-screen loading spinner shown while auth initializes */
+function AppLoadingScreen() {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center gap-4" style={{ background: '#0E1117' }}>
+      <AttendXLogo className="w-16 h-16 animate-pulse" />
+      <div className="flex items-center gap-2">
+        <div className="w-2 h-2 rounded-full bg-violet-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+        <div className="w-2 h-2 rounded-full bg-violet-500 animate-bounce" style={{ animationDelay: '150ms' }} />
+        <div className="w-2 h-2 rounded-full bg-violet-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+      </div>
+      <p className="text-white/40 text-sm font-medium">Loading AttendX...</p>
+    </div>
+  );
+}
+
 function AppLayout() {
-  const { isAuthenticated, user } = useAuth();
+  const { isAuthenticated, user, loading } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [darkMode, setDarkMode] = useState(() => {
     const saved = localStorage.getItem('attendx-theme');
@@ -48,15 +70,23 @@ function AppLayout() {
     localStorage.setItem('attendx-theme', darkMode ? 'dark' : 'light');
   }, [darkMode]);
 
+  // Show branded loading screen while auth state initializes
+  if (loading) {
+    return <AppLoadingScreen />;
+  }
+
+  // ── Not authenticated: show login + catch-all redirect ──
   if (!isAuthenticated) {
     return (
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        {/* Any unknown or protected route → login */}
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     );
   }
 
+  // ── Authenticated: full app shell ──
   const getDefaultPath = () => {
     switch (user?.role) {
       case 'super_admin': return '/superadmin';
@@ -77,6 +107,12 @@ function AppLayout() {
         />
         <main className="p-6 mt-16 min-h-[calc(100vh-4rem)]">
           <Routes>
+            {/* Authenticated user visiting /login → redirect to dashboard */}
+            <Route path="/login" element={<Navigate to={getDefaultPath()} replace />} />
+
+            {/* Root → dashboard */}
+            <Route path="/" element={<Navigate to={getDefaultPath()} replace />} />
+
             {/* Super Admin Routes */}
             <Route path="/superadmin" element={
               <ProtectedRoute requiredRole="super_admin"><SuperAdminDashboard /></ProtectedRoute>
@@ -145,8 +181,8 @@ function AppLayout() {
               <ProtectedRoute><ChangePasswordPage /></ProtectedRoute>
             } />
 
-            {/* Default redirect */}
-            <Route path="*" element={<Navigate to={getDefaultPath()} replace />} />
+            {/* Custom 404 — catch all unknown routes */}
+            <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </main>
       </div>
@@ -156,7 +192,7 @@ function AppLayout() {
 
 export default function App() {
   return (
-    <BrowserRouter basename="/attendx">
+    <BrowserRouter basename={BASE}>
       <AuthProvider>
         <AppLayout />
         <Toaster
