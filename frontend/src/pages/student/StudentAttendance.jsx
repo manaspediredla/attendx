@@ -12,8 +12,11 @@ import {
 const DEFAULT_MIN_ACCURACY = 45;
 const SCAN_INTERVAL_MS = 700;
 const MATCH_STREAK_REQUIRED = 2;
-const BLINKS_REQUIRED = 2;
-const BLINK_EAR_THRESHOLD = 0.22;
+const BLINKS_REQUIRED = 3;
+const BLINK_EAR_THRESHOLD = 0.21;       // absolute EAR below which = eyes closed
+const BLINK_DROP_RATIO = 0.35;          // EAR must drop 35% from baseline
+const CLOSED_FRAMES_REQUIRED = 3;       // eyes must stay closed for 3 consecutive frames (~600ms)
+const BASELINE_FRAMES = 10;             // frames to calibrate EAR baseline
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 
 export default function StudentAttendance() {
@@ -56,6 +59,9 @@ export default function StudentAttendance() {
   const [livenessMessage, setLivenessMessage] = useState('');
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const blinkStateRef = useRef('open'); // 'open' or 'closed'
+  const closedFrameCountRef = useRef(0);
+  const earBaselineRef = useRef(null); // calibrated open-eye EAR
+  const earSamplesRef = useRef([]);
   const livenessIntervalRef = useRef(null);
 
   useEffect(() => {
@@ -353,13 +359,32 @@ export default function StudentAttendance() {
       const earRight = computeEAR(rightEye);
       const ear = (earLeft + earRight) / 2;
 
-      if (ear < BLINK_EAR_THRESHOLD) {
-        if (blinkStateRef.current === 'open') {
+      // Phase 1: Calibrate baseline EAR from first N frames
+      if (!earBaselineRef.current) {
+        earSamplesRef.current.push(ear);
+        setLivenessMessage(`Calibrating... Look at the camera (${earSamplesRef.current.length}/${BASELINE_FRAMES})`);
+        if (earSamplesRef.current.length >= BASELINE_FRAMES) {
+          const sorted = [...earSamplesRef.current].sort((a, b) => a - b);
+          // Use median as baseline (robust to outliers)
+          earBaselineRef.current = sorted[Math.floor(sorted.length / 2)];
+          setLivenessMessage(`Ready! Blink your eyes (0/${BLINKS_REQUIRED})`);
+        }
+        return;
+      }
+
+      const baseline = earBaselineRef.current;
+      const dropThreshold = baseline * (1 - BLINK_DROP_RATIO);
+      const isClosed = ear < BLINK_EAR_THRESHOLD && ear < dropThreshold;
+
+      if (isClosed) {
+        closedFrameCountRef.current += 1;
+        if (closedFrameCountRef.current >= CLOSED_FRAMES_REQUIRED && blinkStateRef.current === 'open') {
           blinkStateRef.current = 'closed';
         }
       } else {
         if (blinkStateRef.current === 'closed') {
           blinkStateRef.current = 'open';
+          closedFrameCountRef.current = 0;
           // Blink completed!
           setBlinkCount(prev => {
             const newCount = prev + 1;
@@ -376,12 +401,13 @@ export default function StudentAttendance() {
             return newCount;
           });
         }
+        closedFrameCountRef.current = 0;
       }
 
-      if (blinkStateRef.current === 'open') {
-        setLivenessMessage(`Blink your eyes! (${Math.min(blinkCount, BLINKS_REQUIRED - 1)}/${BLINKS_REQUIRED})`);
-      } else {
-        setLivenessMessage('Blink detected...');
+      if (earBaselineRef.current && blinkStateRef.current === 'open') {
+        setLivenessMessage(`Blink your eyes slowly! (${Math.min(blinkCount, BLINKS_REQUIRED - 1)}/${BLINKS_REQUIRED})`);
+      } else if (blinkStateRef.current === 'closed') {
+        setLivenessMessage('Hold... detecting blink...');
       }
     } catch {
       // Silently handle detection errors
@@ -399,7 +425,10 @@ export default function StudentAttendance() {
     setLivenessChecking(true);
     setBlinkCount(0);
     blinkStateRef.current = 'open';
-    setLivenessMessage(`Blink your eyes! (0/${BLINKS_REQUIRED})`);
+    closedFrameCountRef.current = 0;
+    earBaselineRef.current = null;
+    earSamplesRef.current = [];
+    setLivenessMessage('Calibrating... Look at the camera');
     livenessIntervalRef.current = setInterval(detectBlink, 200);
   }, [loadFaceModels, detectBlink]);
 
