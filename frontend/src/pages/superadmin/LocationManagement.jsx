@@ -17,12 +17,12 @@ export default function LocationManagement() {
   const [detecting, setDetecting] = useState(false);
   const searchTimeoutRef = useRef(null);
 
-  const fetch = () => {
+  const loadLocations = () => {
     api.get('/admin/locations').then(res => setLocations(res.data || []))
       .catch(() => toast.error('Failed to load')).finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetch(); }, []);
+  useEffect(() => { loadLocations(); }, []);
 
   useEffect(() => () => {
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
@@ -35,7 +35,7 @@ export default function LocationManagement() {
       else { await api.post('/admin/locations', form); toast.success('Added'); }
       setShowModal(false); setEditItem(null);
       resetForm();
-      fetch();
+      loadLocations();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
@@ -47,7 +47,7 @@ export default function LocationManagement() {
 
   const handleDelete = async (id) => {
     if (!confirm('Delete this location?')) return;
-    try { await api.delete(`/admin/locations/${id}`); toast.success('Deleted'); fetch(); }
+    try { await api.delete(`/admin/locations/${id}`); toast.success('Deleted'); loadLocations(); }
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
