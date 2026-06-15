@@ -94,11 +94,13 @@ export function AuthProvider({ children }) {
   const logout = () => {
     api.post('/auth/logout').catch(() => {});
     clearTabAuth();
+    // Also clear localStorage to prevent re-bootstrap
+    ['access_token', 'refresh_token', 'user'].forEach(k => localStorage.removeItem(k));
     setToken(null);
     setUser(null);
     setStudentId(null);
     setMustChangePassword(false);
-    window.location.replace(import.meta.env.BASE_URL + 'login');
+    // Stay in the SPA — ProtectedRoute will redirect to /login
   };
 
   const passwordChanged = () => {
