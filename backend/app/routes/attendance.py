@@ -33,8 +33,46 @@ from app.services.face_service import (
 from app.services.validation_service import validate_gps, validate_network, get_validation_status
 from app.utils.decorators import teacher_or_admin_required, student_required, log_audit
 from app.utils.request_helpers import get_client_ip
+import face_recognition
+import numpy as np
 
 attendance_bp = Blueprint("attendance", __name__, url_prefix="/api/attendance")
+
+
+def _anti_spoof_check(frames_b64, min_frames=3, min_variance=3.0):
+    """Check multiple frames for natural face movement.
+
+    A real person's face moves between frames; a photo on a phone is static.
+    Returns (passed: bool, reason: str).
+    """
+    if not frames_b64 or len(frames_b64) < min_frames:
+        return True, "insufficient_frames"  # Skip if not enough frames sent
+
+    centers = []
+    for b64 in frames_b64[:6]:  # max 6 frames
+        img = decode_base64_image(b64)
+        if img is None:
+            continue
+        # Downscale for speed
+        small = img[::2, ::2]
+        locs = face_recognition.face_locations(small, model="hog")
+        if locs:
+            top, right, bottom, left = locs[0]
+            cx = (left + right) / 2
+            cy = (top + bottom) / 2
+            centers.append((cx, cy))
+
+    if len(centers) < min_frames:
+        return True, "faces_not_detected"  # Can't verify, allow
+
+    xs = [c[0] for c in centers]
+    ys = [c[1] for c in centers]
+    variance = np.std(xs) + np.std(ys)
+
+    if variance < min_variance:
+        return False, f"static_face_detected (variance={variance:.1f}, min={min_variance})"
+
+    return True, f"motion_ok (variance={variance:.1f})"
 
 
 def _session_dict(session):
@@ -422,6 +460,20 @@ def student_mark_attendance():
     image = decode_base64_image(image_b64)
     if image is None:
         return jsonify({"error": "Failed to decode image"}), 400
+
+    # ── Anti-spoofing: multi-frame motion check ──────────────
+    anti_spoof_frames = data.get("anti_spoof_frames", [])
+    spoof_passed, spoof_reason = _anti_spoof_check(anti_spoof_frames)
+    if not spoof_passed:
+        log_audit(
+            "anti_spoof_failed",
+            f"Student {student.roll_number} failed anti-spoofing: {spoof_reason}",
+        )
+        return jsonify({
+            "error": "Anti-spoofing check failed",
+            "message": "Static face detected — use a real face, not a photo or screen.",
+            "details": spoof_reason,
+        }), 403
 
     face_result = recognize_student_face(image, student.id)
 

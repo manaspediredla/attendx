@@ -51,6 +51,7 @@ export default function StudentAttendance() {
   const scanningRef = useRef(false);
   const matchStreakRef = useRef(0);
   const impostorWarnedRef = useRef(false);
+  const frameBufferRef = useRef([]); // collect frames for anti-spoofing
 
   // Liveness detection state
   const [livenessVerified, setLivenessVerified] = useState(false);
@@ -213,6 +214,11 @@ export default function StudentAttendance() {
     stopFaceScan();
 
     const image = frame.includes(',') ? frame.split(',')[1] : frame;
+    // Collect anti-spoofing frames (use buffered frames from scan)
+    const antiSpoofFrames = frameBufferRef.current
+      .slice(-5)
+      .map(f => f.includes(',') ? f.split(',')[1] : f);
+
     try {
       let ip = publicIp;
       if (!ip) ip = await fetchPublicIp();
@@ -220,6 +226,7 @@ export default function StudentAttendance() {
       const res = await api.post('/attendance/mark', {
         session_id: selectedSession.id,
         image,
+        anti_spoof_frames: antiSpoofFrames,
         latitude: gpsData.latitude,
         longitude: gpsData.longitude,
         public_ip: ip,
@@ -272,6 +279,12 @@ export default function StudentAttendance() {
         setMinAccuracy(data.threshold_percent);
       }
 
+      // Buffer frames for anti-spoofing (keep last 8)
+      if (data.face_detected) {
+        frameBufferRef.current.push(frame);
+        if (frameBufferRef.current.length > 8) frameBufferRef.current.shift();
+      }
+
       if (!data.registered) {
         stopFaceScan();
         toast.error(data.message || 'Face not registered');
@@ -309,6 +322,7 @@ export default function StudentAttendance() {
     setFaceDetected(false);
     matchStreakRef.current = 0;
     impostorWarnedRef.current = false;
+    frameBufferRef.current = []; // reset frame buffer
     scanIntervalRef.current = setInterval(scanFace, SCAN_INTERVAL_MS);
     scanFace();
   }, [scanFace]);
@@ -417,10 +431,15 @@ export default function StudentAttendance() {
   const startLivenessCheck = useCallback(async () => {
     const loaded = await loadFaceModels();
     if (!loaded) {
-      // If models fail to load, skip liveness
-      setLivenessVerified(true);
-      toast('Liveness detection unavailable, proceeding...', { icon: '⚠️' });
-      return;
+      // Retry once
+      setLivenessMessage('Retrying model load...');
+      const retry = await loadFaceModels();
+      if (!retry) {
+        setLivenessMessage('⚠️ Liveness models failed. Tap to retry.');
+        setLivenessChecking(false);
+        toast.error('Liveness detection failed to load. Please try again.');
+        return;
+      }
     }
     setLivenessChecking(true);
     setBlinkCount(0);
@@ -669,7 +688,15 @@ export default function StudentAttendance() {
                       />
                     ))}
                   </div>
-                  <p className="text-xs text-surface-500">Anti-spoofing verification</p>
+                  <p className="text-xs text-surface-500 mb-2">Anti-spoofing verification</p>
+                  {!livenessChecking && (
+                    <button
+                      onClick={startLivenessCheck}
+                      className="mt-2 px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white text-sm font-semibold rounded-lg transition-colors"
+                    >
+                      🔄 Retry Liveness Check
+                    </button>
+                  )}
                 </div>
               </div>
             )}
