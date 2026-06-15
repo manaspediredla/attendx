@@ -258,3 +258,187 @@ def get_teacher_subjects():
         .all()
     )
     return jsonify([s[0] for s in subjects if s[0]]), 200
+
+
+# ── Risk-specific email templates ─────────────────────────────────
+
+RISK_EMAIL = {
+    "critical": {
+        "subject": "🚨 Critical Attendance Alert — Immediate Action Required",
+        "intro": "Your attendance has fallen to a critically low level and requires immediate action.",
+        "action": "You are at serious risk of academic penalties. Please attend ALL upcoming classes without exception.",
+    },
+    "high": {
+        "subject": "⚠️ Attendance Warning — High Risk",
+        "intro": "Your attendance is dangerously low and approaching the critical zone.",
+        "action": "Please prioritize attending classes regularly to avoid falling into the critical category.",
+    },
+    "medium": {
+        "subject": "📋 Attendance Reminder — Approaching Minimum Threshold",
+        "intro": "Your attendance is approaching the minimum required threshold of 75%.",
+        "action": "Please maintain regular attendance to stay above the requirement. A few more absences could put you at high risk.",
+    },
+}
+
+
+@analytics_bp.route("/send-warnings", methods=["POST"])
+@teacher_required
+def send_warnings():
+    """Send attendance warning emails + in-app notifications to at-risk students.
+
+    Body JSON (all optional):
+        subject      – filter by session subject
+        risk_levels  – list of risk tiers to warn (default: critical, high, medium)
+        student_ids  – specific internal student IDs to warn (overrides risk filter)
+    """
+    from app.models.notification import Notification
+    from flask_mail import Message as MailMessage
+    from app.extensions import mail
+
+    teacher_id = int(get_jwt_identity())
+    teacher = User.query.get(teacher_id)
+    data = request.get_json() or {}
+
+    subject_filter = data.get("subject", "").strip()
+    risk_levels = data.get("risk_levels", ["critical", "high", "medium"])
+    specific_ids = data.get("student_ids")  # optional: specific students
+
+    # ── 1. Get this teacher's completed sessions ──────────────────
+    session_q = AttendanceSession.query.filter(
+        AttendanceSession.teacher_id == teacher_id,
+        AttendanceSession.status == "completed",
+    )
+    if subject_filter:
+        session_q = session_q.filter(AttendanceSession.subject == subject_filter)
+
+    sessions = session_q.order_by(AttendanceSession.session_date.asc()).all()
+    if not sessions:
+        return jsonify({"error": "No completed sessions found"}), 400
+
+    session_ids = [s.id for s in sessions]
+    total_sessions = len(session_ids)
+
+    # ── 2. Compute per-student attendance ─────────────────────────
+    records = AttendanceRecord.query.filter(
+        AttendanceRecord.session_id.in_(session_ids)
+    ).all()
+
+    student_records = defaultdict(list)
+    for rec in records:
+        student_records[rec.student_id].append(rec)
+
+    # Also include students with zero records
+    all_students = Student.query.join(User, Student.user_id == User.id).all()
+    student_map = {s.id: s for s in all_students}
+    for s in all_students:
+        if s.id not in student_records:
+            student_records[s.id] = []
+
+    # ── 3. Identify at-risk students and send warnings ────────────
+    emails_sent = 0
+    emails_failed = 0
+    notifications_created = 0
+    students_warned = []
+
+    for sid, recs in student_records.items():
+        student = student_map.get(sid)
+        if not student or not student.user:
+            continue
+
+        # If specific IDs provided, only warn those
+        if specific_ids and student.id not in specific_ids:
+            continue
+
+        # Calculate attendance
+        attended_sessions = {r.session_id for r in recs
+                            if r.status in ("full", "partial", "present_start", "present_end")}
+        attended = len(attended_sessions)
+        current_pct = round((attended / total_sessions) * 100, 1) if total_sessions else 0
+        absent = total_sessions - attended
+
+        risk = _risk_level(current_pct)
+
+        # Skip safe students and those not in requested risk levels
+        if risk not in risk_levels:
+            continue
+
+        # How many more can they miss?
+        projected_total = max(total_sessions, 20)
+        needed_for_75 = int(0.75 * projected_total)
+        can_miss = max(0, (projected_total - needed_for_75) - absent)
+
+        email_cfg = RISK_EMAIL.get(risk, RISK_EMAIL["medium"])
+        teacher_name = teacher.name if teacher else "Your Teacher"
+
+        # ── Create notification ───────────────────────────────────
+        notif_msg = (
+            f"{'🚨' if risk == 'critical' else '⚠️' if risk == 'high' else '📋'} "
+            f"Attendance {email_cfg['subject'].split('—')[0].strip().split('—')[0].strip()}: "
+            f"Your attendance is {current_pct}% ({attended}/{total_sessions} classes). "
+            f"{'You cannot miss any more classes!' if can_miss == 0 else f'You can miss {can_miss} more class(es) before falling below 75%.'} "
+            f"— Sent by {teacher_name}"
+        )
+
+        notification = Notification(
+            student_id=student.id,
+            message=notif_msg,
+            type="attendance_warning",
+        )
+        db.session.add(notification)
+        notifications_created += 1
+
+        # ── Send email ────────────────────────────────────────────
+        try:
+            email_body = f"""Dear {student.user.name},
+
+{email_cfg['intro']}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Student:           {student.user.name}
+  Roll Number:       {student.roll_number}
+  Department:        {student.department}
+  Section:           {student.section}
+  College:           {student.college_name or 'N/A'}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Current Attendance:  {current_pct}%
+  Classes Attended:    {attended} / {total_sessions}
+  Classes Missed:      {absent}
+  Can Still Miss:      {can_miss} more class(es)
+  Risk Level:          {risk.upper()}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+{email_cfg['action']}
+
+If you believe this is an error, please contact your teacher or department administrator.
+
+Regards,
+{teacher_name}
+AttendX — Smart Attendance Management System
+"""
+            msg = MailMessage(
+                subject=email_cfg["subject"],
+                recipients=[student.user.email],
+                body=email_body,
+            )
+            mail.send(msg)
+            emails_sent += 1
+        except Exception as e:
+            emails_failed += 1
+
+        students_warned.append({
+            "name": student.user.name,
+            "roll_number": student.roll_number,
+            "risk_level": risk,
+            "percentage": current_pct,
+        })
+
+    db.session.commit()
+
+    return jsonify({
+        "message": f"Warnings sent to {len(students_warned)} students",
+        "emails_sent": emails_sent,
+        "emails_failed": emails_failed,
+        "notifications_created": notifications_created,
+        "students_warned": students_warned,
+    }), 200
+

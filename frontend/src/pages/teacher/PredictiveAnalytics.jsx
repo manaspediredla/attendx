@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import api from '../../api/axios';
 import toast from 'react-hot-toast';
 import {
@@ -11,6 +11,7 @@ import {
   FunnelIcon,
   ChartBarIcon,
   AcademicCapIcon,
+  EnvelopeIcon,
 } from '@heroicons/react/24/outline';
 
 // ── Risk config ──────────────────────────────────────────────────
@@ -155,6 +156,10 @@ export default function PredictiveAnalytics() {
   const [sortBy, setSortBy] = useState('risk');
   const [sortDir, setSortDir] = useState('asc');
 
+  // Warning modal
+  const [showWarningModal, setShowWarningModal] = useState(false);
+  const [sending, setSending] = useState(false);
+
   useEffect(() => {
     api.get('/teacher/analytics/subjects').then(r => setSubjects(r.data)).catch(() => {});
     fetchData();
@@ -231,6 +236,38 @@ export default function PredictiveAnalytics() {
     }
   };
 
+  // Count at-risk students (non-safe)
+  const atRiskCount = useMemo(() => {
+    return filteredPredictions.filter(p => ['critical', 'high', 'medium'].includes(p.risk_level)).length;
+  }, [filteredPredictions]);
+
+  const atRiskBreakdown = useMemo(() => {
+    const counts = { critical: 0, high: 0, medium: 0 };
+    filteredPredictions.forEach(p => {
+      if (counts[p.risk_level] !== undefined) counts[p.risk_level]++;
+    });
+    return counts;
+  }, [filteredPredictions]);
+
+  const sendWarnings = async () => {
+    setSending(true);
+    try {
+      const payload = { risk_levels: ['critical', 'high', 'medium'] };
+      if (filterSubject) payload.subject = filterSubject;
+      const res = await api.post('/teacher/analytics/send-warnings', payload);
+      const d = res.data;
+      toast.success(
+        `✅ Warnings sent to ${d.notifications_created} students! (${d.emails_sent} emails sent${d.emails_failed ? `, ${d.emails_failed} failed` : ''})`,
+        { duration: 6000 }
+      );
+      setShowWarningModal(false);
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'Failed to send warnings');
+    } finally {
+      setSending(false);
+    }
+  };
+
   const SortHeader = ({ col, children }) => (
     <th
       className="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-surface-500 cursor-pointer hover:text-surface-900 dark:hover:text-surface-200 select-none transition-colors"
@@ -257,6 +294,7 @@ export default function PredictiveAnalytics() {
   const totalSessions = data?.total_sessions || 0;
 
   return (
+    <>
     <motion.div
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
@@ -274,17 +312,28 @@ export default function PredictiveAnalytics() {
           </p>
         </div>
 
-        {/* Subject filter */}
-        {subjects.length > 0 && (
-          <select
-            value={filterSubject}
-            onChange={e => setFilterSubject(e.target.value)}
-            className="input-field text-sm w-48"
+        {/* Subject filter + Send Warnings */}
+        <div className="flex items-center gap-3">
+          {subjects.length > 0 && (
+            <select
+              value={filterSubject}
+              onChange={e => setFilterSubject(e.target.value)}
+              className="input-field text-sm w-48"
+            >
+              <option value="">All Subjects</option>
+              {subjects.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          )}
+
+          <button
+            onClick={() => setShowWarningModal(true)}
+            disabled={atRiskCount === 0}
+            className="btn-primary text-sm flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <option value="">All Subjects</option>
-            {subjects.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-        )}
+            <EnvelopeIcon className="w-4 h-4" />
+            Send Warnings {atRiskCount > 0 && <span className="bg-white/20 px-1.5 py-0.5 rounded-md text-xs">{atRiskCount}</span>}
+          </button>
+        </div>
       </div>
 
       {/* Summary cards */}
@@ -496,5 +545,83 @@ export default function PredictiveAnalytics() {
         </div>
       </div>
     </motion.div>
+
+    {/* Warning Confirmation Modal */}
+    <AnimatePresence>
+      {showWarningModal && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          onClick={() => !sending && setShowWarningModal(false)}
+        >
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.9, opacity: 0 }}
+            className="glass-card p-6 max-w-md w-full"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/15 flex items-center justify-center">
+                <EnvelopeIcon className="w-5 h-5 text-amber-400" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-surface-900 dark:text-surface-100">Send Attendance Warnings</h3>
+                <p className="text-xs text-surface-500">Email + In-app notification</p>
+              </div>
+            </div>
+
+            <p className="text-sm text-surface-600 dark:text-surface-400 mb-4">
+              This will send warning emails and notifications to <strong className="text-surface-900 dark:text-surface-100">{atRiskCount} at-risk students</strong>:
+            </p>
+
+            <div className="space-y-2 mb-5">
+              {atRiskBreakdown.critical > 0 && (
+                <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20">
+                  <span className="text-sm font-semibold text-red-400">🚨 Critical</span>
+                  <span className="text-sm font-bold text-red-400">{atRiskBreakdown.critical} students</span>
+                </div>
+              )}
+              {atRiskBreakdown.high > 0 && (
+                <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-orange-500/10 border border-orange-500/20">
+                  <span className="text-sm font-semibold text-orange-400">⚠️ High Risk</span>
+                  <span className="text-sm font-bold text-orange-400">{atRiskBreakdown.high} students</span>
+                </div>
+              )}
+              {atRiskBreakdown.medium > 0 && (
+                <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
+                  <span className="text-sm font-semibold text-yellow-400">📋 Medium</span>
+                  <span className="text-sm font-bold text-yellow-400">{atRiskBreakdown.medium} students</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowWarningModal(false)}
+                disabled={sending}
+                className="btn-secondary flex-1 text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={sendWarnings}
+                disabled={sending}
+                className="btn-primary flex-1 text-sm flex items-center justify-center gap-2"
+              >
+                {sending ? (
+                  <><div className="spinner w-4 h-4 border-white/40" /> Sending...</>
+                ) : (
+                  <><EnvelopeIcon className="w-4 h-4" /> Send Warnings</>
+                )}
+              </button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+    </>
   );
 }
