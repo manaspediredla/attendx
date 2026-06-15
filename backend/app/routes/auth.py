@@ -235,16 +235,10 @@ def enroll_face():
             "recommended_images": current_app.config.get("FACE_RECOMMENDED_IMAGES", 30),
         }), 400
 
-    # Anti-spoofing check on enrollment frames
-    liveness_frames = data.get("liveness_frames", images[:6])
-    spoof_result = run_antispoof_pipeline(liveness_frames)
-    if not spoof_result["is_live"]:
-        log_audit("spoof_detected_enrollment", f"Spoofing detected during face enrollment for {user.email}: {spoof_result['details']}")
-        return jsonify({
-            "error": "Live Face Verification Failed. Photos, screenshots, printed images, and replay videos are not allowed.",
-            "spoof_detected": True,
-            "spoof_details": spoof_result["details"],
-        }), 403
+    # Note: Anti-spoofing is NOT applied during enrollment.
+    # Enrollment captures 25+ similar frames rapidly from one position,
+    # which the temporal motion check would incorrectly flag as "static".
+    # Anti-spoofing is enforced during verification (login + attendance).
 
     FaceEncoding.query.filter_by(student_id=student.id).delete()
     db.session.flush()
