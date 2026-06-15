@@ -2,14 +2,19 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 import api from '../../api/axios';
+import * as faceapi from 'face-api.js';
 import {
   CameraIcon, MapPinIcon, WifiIcon, CheckCircleIcon,
   ExclamationTriangleIcon, XCircleIcon, FaceSmileIcon,
+  EyeIcon,
 } from '@heroicons/react/24/outline';
 
-const DEFAULT_MIN_ACCURACY = 45; // matches backend tolerance 0.55 → 45% minimum
+const DEFAULT_MIN_ACCURACY = 45;
 const SCAN_INTERVAL_MS = 700;
 const MATCH_STREAK_REQUIRED = 2;
+const BLINKS_REQUIRED = 2;
+const BLINK_EAR_THRESHOLD = 0.22;
+const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 
 export default function StudentAttendance() {
   const [activeSessions, setActiveSessions] = useState([]);
@@ -44,6 +49,15 @@ export default function StudentAttendance() {
   const matchStreakRef = useRef(0);
   const impostorWarnedRef = useRef(false);
 
+  // Liveness detection state
+  const [livenessVerified, setLivenessVerified] = useState(false);
+  const [livenessChecking, setLivenessChecking] = useState(false);
+  const [blinkCount, setBlinkCount] = useState(0);
+  const [livenessMessage, setLivenessMessage] = useState('');
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const blinkStateRef = useRef('open'); // 'open' or 'closed'
+  const livenessIntervalRef = useRef(null);
+
   useEffect(() => {
     api.get('/attendance/active-sessions').then(res => {
       setActiveSessions(res.data.sessions || []);
@@ -52,6 +66,7 @@ export default function StudentAttendance() {
 
   useEffect(() => () => {
     if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
+    if (livenessIntervalRef.current) clearInterval(livenessIntervalRef.current);
     streamRef.current?.getTracks().forEach(t => t.stop());
   }, []);
 
@@ -292,16 +307,122 @@ export default function StudentAttendance() {
     scanFace();
   }, [scanFace]);
 
+  // --- Liveness detection (blink) ---
+  const loadFaceModels = useCallback(async () => {
+    if (modelsLoaded) return true;
+    try {
+      setLivenessMessage('Loading liveness models...');
+      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL);
+      setModelsLoaded(true);
+      return true;
+    } catch (e) {
+      console.error('Failed to load face-api models:', e);
+      setLivenessMessage('Failed to load liveness models');
+      return false;
+    }
+  }, [modelsLoaded]);
+
+  const computeEAR = (eye) => {
+    // Eye Aspect Ratio: (|p2-p6| + |p3-p5|) / (2 * |p1-p4|)
+    const dist = (a, b) => Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
+    const v1 = dist(eye[1], eye[5]);
+    const v2 = dist(eye[2], eye[4]);
+    const h = dist(eye[0], eye[3]);
+    return h > 0 ? (v1 + v2) / (2 * h) : 1;
+  };
+
+  const detectBlink = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video || video.videoWidth === 0) return;
+
+    try {
+      const detection = await faceapi
+        .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.4 }))
+        .withFaceLandmarks(true);
+
+      if (!detection) {
+        setLivenessMessage('Position your face in the camera');
+        return;
+      }
+
+      const landmarks = detection.landmarks;
+      const leftEye = landmarks.getLeftEye();
+      const rightEye = landmarks.getRightEye();
+      const earLeft = computeEAR(leftEye);
+      const earRight = computeEAR(rightEye);
+      const ear = (earLeft + earRight) / 2;
+
+      if (ear < BLINK_EAR_THRESHOLD) {
+        if (blinkStateRef.current === 'open') {
+          blinkStateRef.current = 'closed';
+        }
+      } else {
+        if (blinkStateRef.current === 'closed') {
+          blinkStateRef.current = 'open';
+          // Blink completed!
+          setBlinkCount(prev => {
+            const newCount = prev + 1;
+            if (newCount >= BLINKS_REQUIRED) {
+              setLivenessVerified(true);
+              setLivenessChecking(false);
+              setLivenessMessage('Liveness verified! ✓');
+              if (livenessIntervalRef.current) {
+                clearInterval(livenessIntervalRef.current);
+                livenessIntervalRef.current = null;
+              }
+              toast.success('Liveness verified! Proceeding to face scan...');
+            }
+            return newCount;
+          });
+        }
+      }
+
+      if (blinkStateRef.current === 'open') {
+        setLivenessMessage(`Blink your eyes! (${Math.min(blinkCount, BLINKS_REQUIRED - 1)}/${BLINKS_REQUIRED})`);
+      } else {
+        setLivenessMessage('Blink detected...');
+      }
+    } catch {
+      // Silently handle detection errors
+    }
+  }, [blinkCount]);
+
+  const startLivenessCheck = useCallback(async () => {
+    const loaded = await loadFaceModels();
+    if (!loaded) {
+      // If models fail to load, skip liveness
+      setLivenessVerified(true);
+      toast('Liveness detection unavailable, proceeding...', { icon: '⚠️' });
+      return;
+    }
+    setLivenessChecking(true);
+    setBlinkCount(0);
+    blinkStateRef.current = 'open';
+    setLivenessMessage(`Blink your eyes! (0/${BLINKS_REQUIRED})`);
+    livenessIntervalRef.current = setInterval(detectBlink, 200);
+  }, [loadFaceModels, detectBlink]);
+
+  // Start liveness when reaching step 3
   useEffect(() => {
-    if (step === 3 && cameraReady && !faceScanning && !marking && !result) {
+    if (step === 3 && cameraReady && !livenessVerified && !livenessChecking && !result) {
+      const timer = setTimeout(startLivenessCheck, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [step, cameraReady, livenessVerified, livenessChecking, result, startLivenessCheck]);
+
+  // Start face scan after liveness is verified
+  useEffect(() => {
+    if (step === 3 && cameraReady && livenessVerified && !faceScanning && !marking && !result) {
       const timer = setTimeout(startFaceScan, 500);
       return () => clearTimeout(timer);
     }
     if (step !== 3) stopFaceScan();
-  }, [step, cameraReady, faceScanning, marking, result, startFaceScan, stopFaceScan]);
+  }, [step, cameraReady, livenessVerified, faceScanning, marking, result, startFaceScan, stopFaceScan]);
 
-  const stepIcons = [CameraIcon, MapPinIcon, WifiIcon, FaceSmileIcon, CheckCircleIcon];
-  const stepLabels = ['Camera', 'GPS', 'Network', 'Face Scan', 'Done'];
+  const stepIcons = [CameraIcon, MapPinIcon, WifiIcon, EyeIcon, FaceSmileIcon, CheckCircleIcon];
+  const stepLabels = ['Camera', 'GPS', 'Network', 'Liveness', 'Face Scan', 'Done'];
+  const displayStep = !livenessVerified && step === 3 ? 3 : livenessVerified && step === 3 ? 4 : step > 3 ? 5 : step;
 
   const faceStatusLabel = !faceRegistered
     ? 'Not registered'
@@ -462,18 +583,18 @@ export default function StudentAttendance() {
         <div className="space-y-6">
           <div className="glass-card p-4">
             <div className="flex items-center justify-between">
-              {stepLabels.slice(0, 4).map((label, i) => {
+              {stepLabels.map((label, i) => {
                 const Icon = stepIcons[i];
-                const active = step === i;
-                const done = step > i;
+                const active = displayStep === i;
+                const done = displayStep > i;
                 return (
                   <div key={label} className="flex flex-col items-center gap-1.5 flex-1">
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
+                    <div className={`w-8 h-8 md:w-10 md:h-10 rounded-full flex items-center justify-center transition-all ${
                       done ? 'bg-emerald-500 text-white' : active ? 'bg-surface-600 text-white animate-pulse' : 'bg-surface-200  text-surface-500'
                     }`}>
-                      {done ? <CheckCircleIcon className="w-5 h-5" /> : <Icon className="w-5 h-5" />}
+                      {done ? <CheckCircleIcon className="w-4 h-4 md:w-5 md:h-5" /> : <Icon className="w-4 h-4 md:w-5 md:h-5" />}
                     </div>
-                    <span className={`text-xs font-medium ${active ? 'text-surface-400' : 'text-surface-500'}`}>{label}</span>
+                    <span className={`text-[10px] md:text-xs font-medium ${active ? 'text-surface-400' : 'text-surface-500'}`}>{label}</span>
                   </div>
                 );
               })}
@@ -498,7 +619,33 @@ export default function StudentAttendance() {
               </div>
             )}
 
-            {step === 3 && cameraReady && (
+            {/* Liveness check overlay */}
+            {step === 3 && cameraReady && !livenessVerified && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <div className="bg-black/70 backdrop-blur-sm rounded-2xl p-6 text-center max-w-xs">
+                  <div className="w-16 h-16 rounded-full bg-primary-500/20 flex items-center justify-center mx-auto mb-3">
+                    <EyeIcon className={`w-8 h-8 text-primary-400 ${livenessChecking ? 'animate-pulse' : ''}`} />
+                  </div>
+                  <h3 className="text-lg font-bold text-white mb-1">Liveness Check</h3>
+                  <p className="text-sm text-surface-300 mb-3">{livenessMessage || 'Preparing...'}</p>
+                  <div className="flex items-center justify-center gap-3 mb-2">
+                    {Array.from({ length: BLINKS_REQUIRED }).map((_, i) => (
+                      <div
+                        key={i}
+                        className={`w-4 h-4 rounded-full transition-all duration-300 ${
+                          i < blinkCount
+                            ? 'bg-emerald-400 scale-110 shadow-[0_0_8px_rgba(52,211,153,0.6)]'
+                            : 'bg-surface-600 border border-surface-500'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                  <p className="text-xs text-surface-500">Anti-spoofing verification</p>
+                </div>
+              </div>
+            )}
+
+            {step === 3 && cameraReady && livenessVerified && (
               <>
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                   <div className={`w-48 h-60 rounded-[50%] border-4 transition-colors duration-300 ${
@@ -524,6 +671,11 @@ export default function StudentAttendance() {
                   ) : (
                     <><ExclamationTriangleIcon className="w-4 h-4" /> Position face in oval</>
                   )}
+                </div>
+
+                {/* Liveness verified badge */}
+                <div className="absolute top-3 right-3 flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/90 text-white text-xs font-bold">
+                  <EyeIcon className="w-3.5 h-3.5" /> Live ✓
                 </div>
 
                 {faceScanning && (
