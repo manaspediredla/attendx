@@ -153,24 +153,25 @@ def get_predictions():
         if section and student.section != section:
             continue
 
-        # Presence bitmap (ordered by session date)
+        # Weighted presence (ordered by session date): full=1.0, partial=0.5, absent=0
         recs_sorted = sorted(recs, key=lambda r: session_index.get(r.session_id, 0))
-        presence = [
-            r.status in ("full", "partial", "present_start", "present_end")
-            for r in recs_sorted
-        ]
 
-        # Pad with False for sessions where student had no record (absent)
-        attended_session_ids = {r.session_id for r in recs_sorted}
+        def _weight(status):
+            if status == "full":
+                return 1.0
+            elif status in ("partial", "present_start", "present_end"):
+                return 0.5
+            return 0.0
+
+        # Build weighted presence for ALL sessions (0 for absent/missing)
+        attended_session_ids = {r.session_id: r for r in recs_sorted}
         full_presence = []
         for s_id in session_ids:
             if s_id in attended_session_ids:
-                rec = next(r for r in recs_sorted if r.session_id == s_id)
-                full_presence.append(
-                    rec.status in ("full", "partial", "present_start", "present_end")
-                )
+                rec = attended_session_ids[s_id]
+                full_presence.append(_weight(rec.status))
             else:
-                full_presence.append(False)
+                full_presence.append(0.0)
 
         total = len(full_presence)
         attended = sum(full_presence)
