@@ -12,13 +12,11 @@ const SCAN_INTERVAL_MS = 600;
 const VERIFY_FRAMES = 3;
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 
-// Expression pool — 3 are randomly picked each session
+// Expression pool — easy expressions only, 3 are randomly picked each session
 const ALL_LOGIN_EXPRESSIONS = [
-  { key: 'neutral', label: '😐 Keep a NEUTRAL face', emoji: '😐', threshold: 0.4 },
-  { key: 'happy', label: '😁 Now SMILE widely!', emoji: '😁', threshold: 0.5 },
-  { key: 'surprised', label: '😲 Look SURPRISED!', emoji: '😲', threshold: 0.3 },
-  { key: 'angry', label: '😠 Look ANGRY!', emoji: '😠', threshold: 0.3 },
-  { key: 'sad', label: '😞 Look SAD!', emoji: '😞', threshold: 0.3 },
+  { key: 'neutral', label: '😐 Keep a BLANK face (eyes open)', emoji: '😐', threshold: 0.4 },
+  { key: 'happy', label: '🙂 Give a slight SMILE', emoji: '🙂', threshold: 0.4 },
+  { key: 'surprised', label: '😲 Open your EYES wide!', emoji: '😲', threshold: 0.3 },
 ];
 
 function pickLoginExpressions() {
