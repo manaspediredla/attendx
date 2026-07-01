@@ -7,7 +7,6 @@ services:
     rootDir: backend
     buildCommand: pip install -r requirements-prod.txt
     startCommand: gunicorn run:app --bind 0.0.0.0:$PORT --timeout 120 --workers 2
-    plan: starter
     envVars:
       - key: FLASK_ENV
         value: production
