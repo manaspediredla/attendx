@@ -1,9 +1,12 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-export default defineConfig(({ command }) => ({
+export default defineConfig(({ command }) => {
+  // Use VITE_BASE_PATH for production base (e.g. '/attendx/' for GitHub Pages, '/' for Vercel)
+  const base = command === 'build' ? (process.env.VITE_BASE_PATH || '/') : '/';
+  return {
   plugins: [react()],
-  base: command === 'build' ? '/attendx/' : '/',
+  base,
   server: {
     port: 3000,
     host: true,
@@ -14,4 +17,5 @@ export default defineConfig(({ command }) => ({
       },
     },
   },
-}));
+  };
+});

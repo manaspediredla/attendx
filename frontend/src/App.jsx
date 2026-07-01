@@ -39,8 +39,8 @@ import AttendanceAnalytics from './pages/student/AttendanceAnalytics';
 import StudentNotifications from './pages/student/StudentNotifications';
 import StudentProfile from './pages/student/StudentProfile';
 
-// Determine basename: /attendx/ for production (GitHub Pages), / for dev
-const BASE = import.meta.env.PROD ? '/attendx' : '';
+// Base path: set VITE_BASE_PATH='/attendx' for GitHub Pages, defaults to '' for Vercel
+const BASE = import.meta.env.VITE_BASE_PATH || '';
 
 /** Full-screen loading spinner shown while auth initializes */
 function AppLoadingScreen() {

@@ -58,7 +58,7 @@ api.interceptors.response.use(
       }
 
       clearTabAuth();
-      const base = import.meta.env.PROD ? '/attendx' : '';
+      const base = import.meta.env.VITE_BASE_PATH || '';
       const loginPath = `${base}/login`;
       if (!window.location.pathname.endsWith('/login')) {
         window.location.href = loginPath;
